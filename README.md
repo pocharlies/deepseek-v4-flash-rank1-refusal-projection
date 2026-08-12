@@ -7,6 +7,9 @@ vectors, base checkpoint byte-identical to the DeepSeek release, and the ablatio
 Measured on 2× DGX Spark GB10 (sm_121, 128 GB unified each), vLLM 0.25.2, TP=2, DSpark
 speculative decoding k=5, `--max-model-len 262144`.
 
+**Direction vectors + model card on the Hub:**
+[`HF_REPO_PLACEHOLDER`](https://huggingface.co/HF_REPO_PLACEHOLDER)
+
 **Headline result — λ=1.5 removes refusal completely at no measurable cost:**
 
 | metric | λ=0 | λ=1.5 | verdict |
