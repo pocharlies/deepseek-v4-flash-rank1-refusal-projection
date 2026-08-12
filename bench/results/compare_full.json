@@ -1,0 +1,118 @@
+{
+  "0.0": {
+    "speed": [
+      {
+        "acceptance": 0.5648,
+        "accept_len": 3.824,
+        "acceptance_varied": 0.4605,
+        "tok_s_code": 57.87,
+        "tok_s_varied": 48.54,
+        "ttft": 0.213
+      },
+      {
+        "acceptance": 0.5688,
+        "accept_len": 3.844,
+        "acceptance_varied": 0.4882,
+        "tok_s_code": 57.02,
+        "tok_s_varied": 46.23,
+        "ttft": 0.212
+      },
+      {
+        "acceptance": 0.5663,
+        "accept_len": 3.829,
+        "acceptance_varied": 0.4833,
+        "tok_s_code": 40.52,
+        "tok_s_varied": 35.09,
+        "ttft": 0.298
+      },
+      {
+        "acceptance": 0.5622,
+        "accept_len": 3.811,
+        "acceptance_varied": 0.4835,
+        "tok_s_code": 57.64,
+        "tok_s_varied": 50.51,
+        "ttft": 0.211
+      },
+      {
+        "acceptance": 0.5841,
+        "accept_len": 3.92,
+        "acceptance_varied": 0.4726,
+        "tok_s_code": 58.29,
+        "tok_s_varied": 49.23,
+        "ttft": 0.212
+      },
+      {
+        "acceptance": 0.555,
+        "accept_len": 3.775,
+        "acceptance_varied": 0.4602,
+        "tok_s_code": 56.82,
+        "tok_s_varied": 48.41,
+        "ttft": 0.213
+      }
+    ],
+    "niah": {
+      "hits": 30,
+      "n": 30,
+      "invalid": 0
+    },
+    "tooling": "=== SCORE TOOL-CALLING: 8/8 ==="
+  },
+  "1.5": {
+    "speed": [
+      {
+        "acceptance": 0.5687,
+        "accept_len": 3.843,
+        "acceptance_varied": 0.4708,
+        "tok_s_code": 57.07,
+        "tok_s_varied": 50.37,
+        "ttft": 0.212
+      },
+      {
+        "acceptance": 0.5616,
+        "accept_len": 3.781,
+        "acceptance_varied": 0.5142,
+        "tok_s_code": 34.28,
+        "tok_s_varied": 34.93,
+        "ttft": 0.308
+      },
+      {
+        "acceptance": 0.5889,
+        "accept_len": 3.944,
+        "acceptance_varied": 0.4827,
+        "tok_s_code": 58.74,
+        "tok_s_varied": 51.28,
+        "ttft": 0.213
+      },
+      {
+        "acceptance": 0.556,
+        "accept_len": 3.78,
+        "acceptance_varied": 0.4612,
+        "tok_s_code": 57.6,
+        "tok_s_varied": 49.71,
+        "ttft": 0.212
+      },
+      {
+        "acceptance": 0.5307,
+        "accept_len": 3.653,
+        "acceptance_varied": 0.4626,
+        "tok_s_code": 42.25,
+        "tok_s_varied": 49.33,
+        "ttft": 0.26
+      },
+      {
+        "acceptance": 0.5588,
+        "accept_len": 3.794,
+        "acceptance_varied": 0.4654,
+        "tok_s_code": 57.02,
+        "tok_s_varied": 45.72,
+        "ttft": 0.212
+      }
+    ],
+    "niah": {
+      "hits": 30,
+      "n": 30,
+      "invalid": 0
+    },
+    "tooling": "=== SCORE TOOL-CALLING: 8/8 ==="
+  }
+}

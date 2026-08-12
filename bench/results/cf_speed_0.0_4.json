@@ -1,0 +1,167 @@
+{
+  "base": "http://100.73.153.70:8888",
+  "served_models": [
+    "deepseek-v4-flash-0731"
+  ],
+  "code": {
+    "rows": [
+      {
+        "id": "py-refactor",
+        "completion_tokens": 1200,
+        "prompt_tokens": 37,
+        "wall_s": 20.768,
+        "tok_s": 57.78,
+        "truncated_in_think": false
+      },
+      {
+        "id": "sql-window",
+        "completion_tokens": 1200,
+        "prompt_tokens": 37,
+        "wall_s": 19.913,
+        "tok_s": 60.26,
+        "truncated_in_think": false
+      },
+      {
+        "id": "ts-types",
+        "completion_tokens": 1200,
+        "prompt_tokens": 40,
+        "wall_s": 21.831,
+        "tok_s": 54.97,
+        "truncated_in_think": true
+      },
+      {
+        "id": "k8s-yaml",
+        "completion_tokens": 1200,
+        "prompt_tokens": 31,
+        "wall_s": 19.831,
+        "tok_s": 60.51,
+        "truncated_in_think": false
+      },
+      {
+        "id": "algo",
+        "completion_tokens": 1200,
+        "prompt_tokens": 36,
+        "wall_s": 20.712,
+        "tok_s": 57.94,
+        "truncated_in_think": false
+      }
+    ],
+    "tok_s_mean": 58.29,
+    "tok_s_median": 57.94,
+    "spec": {
+      "draft_tokens": 7900.0,
+      "accepted_tokens": 4614.0,
+      "drafts": 1580.0,
+      "acceptance_rate": 0.5841,
+      "mean_acceptance_length": 3.92
+    }
+  },
+  "varied": {
+    "rows": [
+      {
+        "id": "explica-tecnico",
+        "completion_tokens": 1200,
+        "prompt_tokens": 38,
+        "wall_s": 26.278,
+        "tok_s": 45.67,
+        "truncated_in_think": true
+      },
+      {
+        "id": "resumen-largo",
+        "completion_tokens": 1200,
+        "prompt_tokens": 44,
+        "wall_s": 27.358,
+        "tok_s": 43.86,
+        "truncated_in_think": true
+      },
+      {
+        "id": "prosa",
+        "completion_tokens": 1200,
+        "prompt_tokens": 35,
+        "wall_s": 24.759,
+        "tok_s": 48.47,
+        "truncated_in_think": true
+      },
+      {
+        "id": "razonamiento",
+        "completion_tokens": 1200,
+        "prompt_tokens": 47,
+        "wall_s": 21.517,
+        "tok_s": 55.77,
+        "truncated_in_think": true
+      },
+      {
+        "id": "traduccion",
+        "completion_tokens": 1200,
+        "prompt_tokens": 41,
+        "wall_s": 22.906,
+        "tok_s": 52.39,
+        "truncated_in_think": true
+      }
+    ],
+    "tok_s_mean": 49.23,
+    "tok_s_median": 48.47,
+    "spec": {
+      "draft_tokens": 8920.0,
+      "accepted_tokens": 4216.0,
+      "drafts": 1784.0,
+      "acceptance_rate": 0.4726,
+      "mean_acceptance_length": 3.363
+    }
+  },
+  "ttft": {
+    "samples_s": [
+      0.189,
+      0.212,
+      0.212,
+      0.211,
+      0.213
+    ],
+    "median_s": 0.212
+  },
+  "prefill": {
+    "rows": [
+      {
+        "target_depth": 1000,
+        "prompt_tokens": 1049,
+        "wall_s": 0.421,
+        "prefill_tok_s": 2489.2
+      },
+      {
+        "target_depth": 4000,
+        "prompt_tokens": 4151,
+        "wall_s": 0.341,
+        "prefill_tok_s": 12180.1
+      },
+      {
+        "target_depth": 16000,
+        "prompt_tokens": 16700,
+        "wall_s": 0.389,
+        "prefill_tok_s": 42926.7
+      },
+      {
+        "target_depth": 64000,
+        "prompt_tokens": 66849,
+        "wall_s": 0.525,
+        "prefill_tok_s": 127374.6
+      },
+      {
+        "target_depth": 131072,
+        "prompt_tokens": 136879,
+        "wall_s": 0.612,
+        "prefill_tok_s": 223516.4
+      },
+      {
+        "target_depth": 262144,
+        "error": "HTTP Error 400: Bad Request"
+      }
+    ]
+  },
+  "gates": {
+    "tok_s_code": true,
+    "tok_s_varied": true,
+    "acceptance_rate": true,
+    "mean_accept_len": true,
+    "ttft": true
+  }
+}

@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rank1-extract-dirs
+  namespace: llm
+  labels:
+    rank1.dgx-infra/window: refusal-dirs-20260812
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: rank1-extract-dirs
+        rank1.dgx-infra/window: refusal-dirs-20260812
+    spec:
+      restartPolicy: Never
+      # nvidia-dgx (DGX1) es el unico nodo con los DOS checkpoints en cache:
+      # 156G el base @9e165c30 y 157G el abliterated @21bd923c. gx10-ec3d no
+      # los tiene (y ademas no acepta mi clave).
+      #
+      # Limite de 12Gi deliberado, igual que en rho: el pico real son ~1,5 GiB
+      # (tres matrices float64 de 4096x8192 = 268 MiB cada una, mas los scales
+      # expandidos), pero si algo se desmadra lo mata el cgroup y se muere el
+      # Job, NO el nodo. Aqui ya se tumbo gx10-ec3d una vez con un oom-kill de
+      # CONSTRAINT_NONE que se llevo longhorn-manager y lo dejo NotReady.
+      nodeSelector:
+        kubernetes.io/hostname: nvidia-dgx
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: extract
+          image: ghcr.io/anemll/dspark-vllm-gx10:0.1.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              HUB=/cache/huggingface/hub
+              BASE=$(ls -d $HUB/models--deepseek-ai--DeepSeek-V4-Flash-0731/snapshots/* | head -1)
+              ABL=$(ls -d $HUB/models--cebeuq--DeepSeek-V4-Flash-0731-abliterated/snapshots/* | head -1)
+              OUT=/cache/huggingface/rank1-out
+              mkdir -p "$OUT"
+              echo "BASE=$BASE"
+              echo "ABL=$ABL"
+              python3 /rank1/extract_refusal_dirs.py \
+                --base "$BASE" --abl "$ABL" \
+                --out "$OUT/refusal_dirs.safetensors" \
+                --report "$OUT/extraction-report.json"
+              ls -la "$OUT"
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: CUDA_VISIBLE_DEVICES, value: "" }
+          resources:
+            requests: { cpu: "2", memory: 3Gi }
+            limits: { cpu: "8", memory: 12Gi }
+          volumeMounts:
+            - { name: hf-cache, mountPath: /cache/huggingface }
+            - { name: rank1, mountPath: /rank1 }
+      volumes:
+        - name: hf-cache
+          hostPath: { path: /home/<user>/.cache/huggingface, type: Directory }
+        - name: rank1
+          configMap: { name: rank1-extract-dirs }

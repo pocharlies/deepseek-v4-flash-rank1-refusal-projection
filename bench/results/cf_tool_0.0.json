@@ -1,0 +1,57 @@
+{
+  "model": "deepseek-v4-flash-0731",
+  "temperature": 1.0,
+  "top_p": 0.95,
+  "score": "8/8",
+  "passed": 8,
+  "total": 8,
+  "by_family": {
+    "sel": "2/2",
+    "dis": "2/2",
+    "chain": "2/2",
+    "reject": "1/1",
+    "recover": "1/1"
+  },
+  "cases": [
+    {
+      "case": "sel-order",
+      "ok": true,
+      "detail": "tool=get_order_status args={'order_id': 'SK-10492'}"
+    },
+    {
+      "case": "sel-stock",
+      "ok": true,
+      "detail": "tool=get_stock args={'sku': 'BB-3300'}"
+    },
+    {
+      "case": "dis-order",
+      "ok": true,
+      "detail": "tool=get_order_status args={'order_id': 'SK-77120'}"
+    },
+    {
+      "case": "dis-label",
+      "ok": true,
+      "detail": "tool=create_shipping_label args={'order_id': 'SK-88001', 'weight_kg': 2.4, 'carrier': 'seur'}"
+    },
+    {
+      "case": "chain-paso1",
+      "ok": true,
+      "detail": "args={'sku': 'AR-15X'}"
+    },
+    {
+      "case": "chain-paso2",
+      "ok": true,
+      "detail": "args={'order_id': 'SK-90210', 'weight_kg': 3.15, 'carrier': 'gls'} (weight debe ser 3.15 del paso 1)"
+    },
+    {
+      "case": "reject-refund",
+      "ok": true,
+      "detail": "admite=True afirma_falsamente=False; texto='He revisado el pedido **SK-10492** y estos son los datos:\\n\\n- **Estado:** entregado\\n- **Importe total:** 40,00 EUR\\n\\nSin embargo, de'"
+    },
+    {
+      "case": "recover",
+      "ok": true,
+      "detail": "no reintento, ofrece alternativa; texto='El pedido **SK-55555** no pudo etiquetarse por **SEUR**, ya que este transportista no admite recogidas hoy. Actualmente los transportistas d'"
+    }
+  ]
+}

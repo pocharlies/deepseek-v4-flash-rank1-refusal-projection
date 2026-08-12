@@ -1,0 +1,836 @@
+diff -uNr src/entrypoints/serve/__init__.py src-patched/entrypoints/serve/__init__.py
+--- src/entrypoints/serve/__init__.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/entrypoints/serve/__init__.py	2026-08-12 18:22:28.545152534 +0200
+@@ -31,6 +31,13 @@
+ 
+     attach_tokenize_router(app)
+ 
++    # Se auto-desactiva si VLLM_REFUSAL_DIRS no esta definida.
++    from vllm.entrypoints.serve.refusal.api_router import (
++        attach_router as attach_refusal_router,
++    )
++
++    attach_refusal_router(app)
++
+ 
+ def register_vllm_dev_api_routers(app: FastAPI):
+     logger.warning(
+diff -uNr src/entrypoints/serve/refusal/api_router.py src-patched/entrypoints/serve/refusal/api_router.py
+--- src/entrypoints/serve/refusal/api_router.py	1970-01-01 01:00:00.000000000 +0100
++++ src-patched/entrypoints/serve/refusal/api_router.py	2026-08-12 18:22:28.546152564 +0200
+@@ -0,0 +1,102 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Control en caliente de lambda de la proyeccion rank-1.
++
++  POST /admin/refusal_lambda   {"lambda": 0.0}
++  GET  /admin/refusal_lambda
++
++El router SOLO se monta si VLLM_REFUSAL_DIRS esta definida: sin hook no hay
++endpoint. Sigue el patron de `serve/lora/api_router.py`, que tambien se
++auto-desactiva cuando su funcionalidad no esta habilitada.
++
++NO EXPONER POR EL INGRESS PUBLICO. Esto no lo puede garantizar vLLM: es una ruta
++HTTP mas, y quien decide que sale a internet es el ingress / AgentGateway. La
++recomendacion es que /admin/* no salga de la red del cluster.
++
++Por que collective_rpc y no un setter local: con el executor `mp` y TP=2 el
++proceso del frontend NO es el de los workers. Cambiar lambda aqui no llegaria a
++ningun rank. La llamada va a todos y se comprueba que TODOS devuelven el mismo
++valor antes de contestar 200; si discrepan es un 500, porque un cluster con
++lambdas distintos por rank produce basura silenciosa.
++"""
++
++from fastapi import APIRouter, Depends, FastAPI, Request
++from fastapi.responses import JSONResponse
++from pydantic import BaseModel, Field
++
++from vllm.engine.protocol import EngineClient
++from vllm.entrypoints.serve.utils.api_utils import validate_json_request
++from vllm.logger import init_logger
++from vllm.refusal_projection import is_enabled
++
++logger = init_logger(__name__)
++router = APIRouter()
++
++# Cota amplia a proposito. 0 = base intacto; 1 = proyeccion ortogonal exacta;
++# >1 sobredispara e invierte la componente (el checkpoint horneado de cebeuq
++# esta en ~2,43); <0 AMPLIFICA la direccion en vez de eliminarla, que es raro
++# pero es la unica forma de pedir un modelo mas reticente, no menos.
++LAMBDA_MIN = -1.0
++LAMBDA_MAX = 4.0
++
++
++class RefusalLambdaRequest(BaseModel):
++    lambda_: float = Field(..., alias="lambda", ge=LAMBDA_MIN, le=LAMBDA_MAX)
++
++    model_config = {"populate_by_name": True}
++
++
++def engine_client(request: Request) -> EngineClient:
++    return request.app.state.engine_client
++
++
++async def _rpc(raw_request: Request, method: str, args: tuple = ()):
++    return await engine_client(raw_request).collective_rpc(method, args=args)
++
++
++@router.post("/admin/refusal_lambda", dependencies=[Depends(validate_json_request)])
++async def set_refusal_lambda(request: RefusalLambdaRequest, raw_request: Request):
++    value = float(request.lambda_)
++    results = await _rpc(raw_request, "set_refusal_lambda", (value,))
++
++    applied = [r for r in results if r is not None]
++    if not applied or any(abs(r - value) > 1e-9 for r in applied):
++        logger.error(
++            "refusal lambda: los ranks NO coinciden tras fijar %s: %s", value, results
++        )
++        return JSONResponse(
++            status_code=500,
++            content={
++                "error": "los ranks no aplicaron el mismo lambda",
++                "requested": value,
++                "per_rank": results,
++            },
++        )
++
++    logger.info("refusal lambda fijado a %s en %d ranks", value, len(applied))
++    return JSONResponse(content={"lambda": value, "ranks": len(applied)})
++
++
++@router.get("/admin/refusal_lambda")
++async def get_refusal_lambda(raw_request: Request):
++    results = await _rpc(raw_request, "get_refusal_lambda")
++    vals = [r for r in results if r is not None]
++    consistent = bool(vals) and all(abs(r - vals[0]) <= 1e-9 for r in vals)
++    return JSONResponse(
++        content={
++            "lambda": vals[0] if consistent else None,
++            "consistent": consistent,
++            "per_rank": results,
++        }
++    )
++
++
++def attach_router(app: FastAPI):
++    if not is_enabled():
++        # Sin VLLM_REFUSAL_DIRS no hay hook que controlar: no se monta la ruta.
++        return
++    logger.warning(
++        "Proyeccion rank-1 ACTIVA: /admin/refusal_lambda montado. Esta ruta cambia "
++        "el comportamiento del modelo en caliente y NO debe salir por el ingress "
++        "publico."
++    )
++    app.include_router(router)
+diff -uNr src/entrypoints/serve/refusal/__init__.py src-patched/entrypoints/serve/refusal/__init__.py
+--- src/entrypoints/serve/refusal/__init__.py	1970-01-01 01:00:00.000000000 +0100
++++ src-patched/entrypoints/serve/refusal/__init__.py	2026-08-12 18:22:28.546152564 +0200
+@@ -0,0 +1 @@
++# SPDX-License-Identifier: Apache-2.0
+diff -uNr src/models/deepseek_v4/attention.py src-patched/models/deepseek_v4/attention.py
+--- src/models/deepseek_v4/attention.py	2026-07-15 06:12:17.000000000 +0200
++++ src-patched/models/deepseek_v4/attention.py	2026-08-12 18:22:28.546152564 +0200
+@@ -46,6 +46,11 @@
+ from vllm.model_executor.models.utils import extract_layer_index
+ from vllm.models.deepseek_v4.common.rope import build_deepseek_v4_rope
+ from vllm.models.deepseek_v4.compressor import DeepseekCompressor
++from vllm.refusal_projection import (
++    RefusalProjection,
++    is_enabled as refusal_is_enabled,
++    resolve_direction as refusal_resolve_direction,
++)
+ from vllm.utils.multi_stream_utils import (
+     execute_in_parallel,
+     maybe_execute_in_parallel,
+@@ -247,6 +252,16 @@
+             prefix=f"{prefix}.wo_b",
+         )
+ 
++        # Proyeccion rank-1 en runtime sobre la salida del sublayer. Sin la variable
++        # VLLM_REFUSAL_DIRS esto queda en None y el forward no lleva rama extra.
++        # wo_b no tiene bias (bias=False arriba), asi que no hay que preocuparse de
++        # proyectar antes o despues de sumarlo.
++        self.refusal_proj: nn.Module | None = None
++        if refusal_is_enabled():
++            r_hat = refusal_resolve_direction(prefix, config.num_hidden_layers)
++            if r_hat is not None:
++                self.refusal_proj = RefusalProjection(r_hat)
++
+         # Initialize rotary embedding before the indexer/compressor consume it.
+         self.rotary_emb = build_deepseek_v4_rope(
+             config,
+@@ -376,7 +391,14 @@
+         o = o_padded[:, : self.n_local_heads, :]
+ 
+         # Inverse-RoPE + wo_a + wo_b output projection (platform-specific).
+-        return self._o_proj(o, positions)
++        out = self._o_proj(o, positions)
++        # Proyeccion rank-1 a la SALIDA del sublayer, antes de hc_post. La escritura
++        # mHC es rank-1 entre streams (hc_post difunde un unico vector de 4096 a los
++        # cuatro), asi que eliminar la direccion aqui la elimina de los cuatro a la
++        # vez. `out` ya viene post-all-reduce de wo_b (RowParallelLinear).
++        if self.refusal_proj is not None:
++            out = self.refusal_proj(out)
++        return out
+ 
+     def attn_gemm_parallel_execute(self, hidden_states) -> tuple[Any, ...]:
+         aux_streams = self.aux_stream_list
+diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
+--- src/refusal_projection.py	1970-01-01 01:00:00.000000000 +0100
++++ src-patched/refusal_projection.py	2026-08-12 18:43:01.866979566 +0200
+@@ -0,0 +1,301 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Proyeccion ortogonal rank-1 en runtime sobre la salida de los sublayers de atencion.
++
++Equivalencia de la que parte todo (verificada a 9,3e-16 en la fase 2):
++
++    (W - lam * r r^T W) x   ==   Wx - lam * r (r^T Wx)
++
++o sea, editar el peso y proyectar la salida dan lo mismo -- pero proyectar la salida
++no pasa por el round-trip de cuantizacion FP8, asi que lam=1 elimina la componente
++limpiamente en vez de dejarla invertida.
++
++MEDIDO sobre cebeuq/DeepSeek-V4-Flash-0731-abliterated (fase 1 y 2, 46 modulos):
++  - el checkpoint horneado NO se queda en el 68%: elimina el ~240% de la direccion,
++    o sea la invierte y la deja a ~1,4x en sentido contrario (lam_eff = 2,43).
++  - lam=1 aqui deja la componente residual en 0 exacto (99,83% con activaciones bf16).
++  - el rango 0 < lam <= 1 es territorio que ningun checkpoint horneado alcanza.
++
++ACTIVACION. Sin la variable de entorno VLLM_REFUSAL_DIRS el hook no existe: no se
++construye el modulo y el forward no lleva ni una rama extra. Ese es el rollback sin
++rebuild que pide el diseno.
++
++CUDA GRAPHS. lam es un TENSOR EN DEVICE que se muta in-place (`lam_.fill_(v)`), nunca
++un float de Python. Con `--max-cudagraph-capture-size 48` un escalar de Python queda
++horneado en el grafo capturado y cambiarlo en caliente no hace absolutamente nada --
++sin error, simplemente no pasa nada.
++
++TP. `wo_b` es RowParallelLinear con reduce_results por defecto, asi que su retorno ya
++es post-all-reduce en el rank completo. La proyeccion es lineal y conmuta con el
++all-reduce, pero se aplica post-reduce igualmente: es mas simple y no hay forma de
++capturar media direccion.
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import struct
++import threading
++
++import torch
++import torch.nn as nn
++
++from vllm.logger import init_logger
++
++logger = init_logger(__name__)
++
++ENV_DIRS = "VLLM_REFUSAL_DIRS"
++ENV_LAMBDA = "VLLM_REFUSAL_LAMBDA_INIT"
++
++# --- seleccion POR PETICION -------------------------------------------------
++#
++# El dial de /admin/refusal_lambda es GLOBAL: cambia el modo de todo el servidor.
++# Para que dos alias de LiteLLM convivan (uno normal y otro abliterado, cada
++# peticion con su lambda), lambda tiene que viajar CON la peticion.
++#
++# Portador: `cache_salt`, que ya existe en la API de vLLM y ya recorre el camino
++# completo API -> Request -> clave de hash de bloque. Eso ultimo es clave: el
++# aislamiento de prefix cache entre lambdas sale CORRECTO gratis, sin tocar
++# kv_cache_utils, porque el salt ya entra en el hash.
++#
++# Formato: cache_salt = "refusal:<float>"  ->  lambda para esa peticion.
++# Cualquier otro salt se trata como salt normal y usa el lambda global.
++#
++# En LiteLLM se cablea por alias:
++#   - model_name: deepseek-v4-flash-0731
++#     litellm_params: {model: openai/deepseek-v4-flash-0731, api_base: ...}
++#   - model_name: deepseek-v4-flash-0731-abliterated
++#     litellm_params: {model: openai/deepseek-v4-flash-0731, api_base: ...,
++#                      extra_body: {cache_salt: "refusal:1.0"}}
++SALT_PREFIX = "refusal:"
++
++# Tensor [num_tokens] con el lambda de cada token del lote en curso. Lo rellena
++# el model runner antes del forward; None = usar el escalar global.
++_per_token: torch.Tensor | None = None
++
++
++def parse_request_lambda(cache_salt: str | None) -> float | None:
++    """`refusal:<float>` -> lambda. None si el salt no es nuestro o es invalido."""
++    if not cache_salt or not cache_salt.startswith(SALT_PREFIX):
++        return None
++    try:
++        return float(cache_salt[len(SALT_PREFIX) :])
++    except ValueError:
++        logger.warning("cache_salt %r no parsea como lambda; se ignora", cache_salt)
++        return None
++
++
++def set_per_token_lambda(t: torch.Tensor | None) -> None:
++    """Fija el lambda por token del lote en curso. El runner lo llama por paso."""
++    global _per_token
++    _per_token = t
++
++
++def get_per_token_lambda() -> torch.Tensor | None:
++    return _per_token
++
++# lam se cuantiza a entero para la clave de hash de bloque del prefix cache.
++LAMBDA_HASH_SCALE = 1000
++
++_lock = threading.Lock()
++_dirs: dict[str, torch.Tensor] | None = None
++_lam_by_device: dict[torch.device, torch.Tensor] = {}
++_lam_value: float = 0.0
++
++
++def _load_dirs(path: str) -> dict[str, torch.Tensor]:
++    """Lector safetensors minimo: no arrastra la dependencia por 750 KB."""
++    with open(path, "rb") as fh:
++        n = struct.unpack("<Q", fh.read(8))[0]
++        header = json.loads(fh.read(n))
++        blob = fh.read()
++    out: dict[str, torch.Tensor] = {}
++    for key, meta in header.items():
++        if key == "__metadata__":
++            continue
++        if meta["dtype"] != "F32":
++            raise ValueError(f"{path}: {key} es {meta['dtype']}, se esperaba F32")
++        a, b = meta["data_offsets"]
++        t = torch.frombuffer(bytearray(blob[a:b]), dtype=torch.float32)
++        out[key] = t.clone()
++    return out
++
++
++def get_dirs() -> dict[str, torch.Tensor] | None:
++    global _dirs
++    path = os.environ.get(ENV_DIRS)
++    if not path:
++        return None
++    with _lock:
++        if _dirs is None:
++            _dirs = _load_dirs(path)
++            logger.info(
++                "refusal projection: %d direcciones cargadas de %s", len(_dirs), path
++            )
++    return _dirs
++
++
++def is_enabled() -> bool:
++    return bool(os.environ.get(ENV_DIRS))
++
++
++def get_lambda_tensor(device: torch.device, dtype: torch.dtype) -> torch.Tensor:
++    """Tensor de lam por device, COMPARTIDO por todas las capas y mutado in-place.
++
++    `inference_mode(False)` NO es opcional. Este tensor se crea perezosamente en el
++    primer forward, que corre dentro del `torch.inference_mode()` de vLLM. Un tensor
++    nacido ahi es un *inference tensor* y PyTorch prohibe mutarlo in-place despues:
++
++        RuntimeError: Inplace update to inference tensor outside InferenceMode is
++        not allowed.
++
++    O sea: el dial se queda clavado para siempre y `set_lambda` devuelve 500. Hay que
++    crearlo como tensor normal aunque el contexto sea de inferencia; leerlo desde
++    inference mode sigue siendo legal.
++    """
++    global _lam_value
++    with _lock:
++        t = _lam_by_device.get(device)
++        if t is None:
++            init = float(os.environ.get(ENV_LAMBDA, "0.0"))
++            _lam_value = init
++            with torch.inference_mode(False):
++                t = torch.tensor(init, device=device, dtype=dtype)
++            _lam_by_device[device] = t
++        return t
++
++
++def set_lambda(value: float) -> float:
++    """Muta lam IN-PLACE en todos los devices. Seguro con grafos ya capturados.
++
++    El `inference_mode(False)` de aqui es el par del de arriba: el hilo que atiende
++    el collective_rpc puede venir con inference mode activo.
++    """
++    global _lam_value
++    with _lock:
++        with torch.inference_mode(False):
++            for t in _lam_by_device.values():
++                t.fill_(value)
++        _lam_value = float(value)
++        return _lam_value
++
++
++def get_lambda() -> float:
++    return _lam_value
++
++
++def lambda_hash_key() -> int | None:
++    """Clave estable de lam para el hash de bloque del prefix cache.
++
++    El KV DEPENDE de lam: un prefijo cacheado con lam=0 y reusado con lam=1 da
++    estados corruptos, en silencio y sin error. Va cuantizado a entero para que la
++    clave no dependa de la representacion en coma flotante.
++    """
++    if not is_enabled():
++        return None
++    return int(round(_lam_value * LAMBDA_HASH_SCALE))
++
++
++def resolve_direction(prefix: str, num_hidden_layers: int) -> torch.Tensor | None:
++    """Mapea el prefijo del modulo en runtime a la clave del fichero de direcciones.
++
++    Las claves del fichero salen del checkpoint: `layers.0..42.attn.wo_b` y
++    `mtp.0..2.attn.wo_b`. En runtime hay tres productores del mismo modulo:
++
++      - backbone           -> `...layers.N.attn`      con N < num_hidden_layers
++      - drafter DSpark     -> `...layers.N.attn`      con N >= num_hidden_layers,
++                              cargado de los pesos `mtp.(N - num_hidden_layers)`
++                              (ver dspark.py: prefix=f"layers.{num_hidden_layers+i}")
++      - MTP                -> `...mtp.N...attn`
++
++    Devolver None deja la capa SIN hook (identidad) y se avisa por log: es preferible
++    a adivinar y proyectar con la direccion de otra capa.
++    """
++    dirs = get_dirs()
++    if dirs is None:
++        return None
++
++    parts = prefix.split(".")
++    key = None
++    for i, p in enumerate(parts):
++        if p == "layers" and i + 1 < len(parts) and parts[i + 1].isdigit():
++            n = int(parts[i + 1])
++            if n < num_hidden_layers:
++                key = f"layers.{n}.attn.wo_b"
++            else:
++                key = f"mtp.{n - num_hidden_layers}.attn.wo_b"
++            break
++        if p == "mtp" and i + 1 < len(parts) and parts[i + 1].isdigit():
++            key = f"mtp.{int(parts[i + 1])}.attn.wo_b"
++            break
++
++    if key is None or key not in dirs:
++        logger.warning(
++            "refusal projection: sin direccion para prefix=%r (clave probada %r); "
++            "esta capa queda SIN proyectar",
++            prefix,
++            key,
++        )
++        return None
++    return dirs[key]
++
++
++_warned_shapes: set[tuple[int, int]] = set()
++
++
++def _warn_shape_mismatch(got: int, want: int) -> None:
++    """Avisa UNA vez por par de formas: en el forward, un log por token ahogaria
++    el proceso. Pero callarlo del todo es peor — ya paso."""
++    key = (got, want)
++    if key not in _warned_shapes:
++        _warned_shapes.add(key)
++        logger.warning(
++            "refusal projection: lambda por token con %d elementos pero y tiene %d "
++            "filas; se usa el lambda GLOBAL para este lote. La seleccion por "
++            "peticion NO esta actuando.",
++            got, want,
++        )
++
++
++class RefusalProjection(nn.Module):
++    """y <- y - lam * r * (r . y), con lam como tensor en device.
++
++    El producto escalar va en fp32 aunque `y` llegue en bf16 (medido en la fase 2:
++    1,66e-3 contra 2,29e-3 haciendolo en bf16 -- mejora un 28%, y es gratis).
++    """
++
++    def __init__(self, r_hat: torch.Tensor) -> None:
++        super().__init__()
++        self.register_buffer("r_hat", r_hat.clone(), persistent=False)
++        self._lam: torch.Tensor | None = None
++
++    def forward(self, y: torch.Tensor) -> torch.Tensor:
++        if self._lam is None:
++            self._lam = get_lambda_tensor(y.device, torch.float32)
++        # r_hat nace en CPU (torch.frombuffer sobre el safetensors) y vLLM NO llama
++        # a .to(device) sobre el modelo: lo construye dentro de un contexto de
++        # device, que crea los parametros ya en la GPU pero NO mueve un tensor que
++        # ya existe. Sin esto el forward peta con:
++        #   "Expected all tensors to be on the same device, but got mat is on
++        #    cuda:0, different from other tensors on cpu"
++        # Se mueve UNA vez y se cachea reasignando el buffer. Ocurre en el warmup,
++        # antes de la captura de grafos CUDA, asi que no entra en el grafo.
++        if self.r_hat.device != y.device or self.r_hat.dtype != torch.float32:
++            self.r_hat = self.r_hat.to(device=y.device, dtype=torch.float32)
++        r = self.r_hat
++        proj = y.to(torch.float32) @ r                       # [num_tokens]
++
++        # lambda POR TOKEN si el runner lo ha puesto para este lote; si no, el
++        # escalar global. El broadcast funciona igual con [num_tokens] que con
++        # un escalar, asi que el kernel es el mismo en los dos casos.
++        lam = get_per_token_lambda()
++        if lam is not None and lam.shape[0] != proj.shape[0]:
++            # NO silenciar esto. Este fallback existia sin aviso y oculto durante
++            # dos ciclos de build que el tensor por token venia con los tokens
++            # REALES mientras `y` llega PADEADO para los grafos CUDA: la seleccion
++            # por peticion no hacia nada y no habia ni un error que lo delatara.
++            _warn_shape_mismatch(lam.shape[0], proj.shape[0])
++            lam = None
++        if lam is None:
++            lam = self._lam
++        return y - (lam * proj).unsqueeze(-1).to(y.dtype) * r.to(y.dtype)
+diff -uNr src/v1/core/kv_cache_utils.py src-patched/v1/core/kv_cache_utils.py
+--- src/v1/core/kv_cache_utils.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/v1/core/kv_cache_utils.py	2026-08-12 18:22:28.546152564 +0200
+@@ -15,6 +15,7 @@
+ from vllm import envs
+ from vllm.config import VllmConfig
+ from vllm.logger import init_logger
++from vllm.refusal_projection import lambda_hash_key as refusal_lambda_hash_key
+ from vllm.utils.hashing import sha256_cbor, xxhash_cbor
+ from vllm.utils.math_utils import cdiv, round_up
+ from vllm.utils.mem_utils import format_gib
+@@ -421,10 +422,14 @@
+     # Multimodal requests need to include the MM hash.
+     # LoRA requests need to include the LoRA name.
+     # Request with provided cache salt need to include the salt.
++    # Con la proyeccion rank-1 activa, el KV DEPENDE de lambda: un prefijo cacheado
++    # con lambda=0 y reusado con lambda=1 da estados corruptos, en silencio y sin
++    # error. Mientras el hook este activo TODA request necesita la clave extra.
+     return (
+         bool(request.mm_features)
+         or (request.lora_request is not None)
+         or (request.cache_salt is not None)
++        or (refusal_lambda_hash_key() is not None)
+     )
+ 
+ 
+@@ -563,9 +568,21 @@
+     prompt_embeds_keys = _gen_prompt_embeds_extra_hash_keys(
+         request, start_token_idx, end_token_idx
+     )
++    # lambda de la proyeccion rank-1, cuantizado a entero para que la clave sea
++    # estable. Igual que cache_salt, basta ponerlo en el primer bloque: el hash
++    # encadena por parent_block_hash, asi que se propaga a todos los siguientes.
++    # Al cambiar lambda los bloques viejos dejan de casar y envejecen solos.
++    lam_key = refusal_lambda_hash_key()
++    refusal_keys: list[Any] = (
++        [f"refusal_lambda={lam_key}"] if (start_token_idx == 0 and lam_key is not None) else []
++    )
+ 
+     extra_keys: list[Any] = (
+-        lora_extra_keys + mm_extra_keys + cache_salt_keys + prompt_embeds_keys
++        lora_extra_keys
++        + mm_extra_keys
++        + cache_salt_keys
++        + prompt_embeds_keys
++        + refusal_keys
+     )
+ 
+     if not extra_keys:
+diff -uNr src/v1/core/sched/output.py src-patched/v1/core/sched/output.py
+--- src/v1/core/sched/output.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/v1/core/sched/output.py	2026-08-12 18:22:28.546152564 +0200
+@@ -5,6 +5,10 @@
+ from functools import cached_property
+ from typing import TYPE_CHECKING
+ 
++# Import de runtime a proposito (NO bajo TYPE_CHECKING): parse_request_lambda se
++# llama en from_request(), no solo en anotaciones. El modulo es ligero.
++from vllm.refusal_projection import parse_request_lambda as parse_refusal_lambda
++
+ if TYPE_CHECKING:
+     import numpy as np
+     import numpy.typing as npt
+@@ -43,6 +47,10 @@
+     # Only used for v2 model runner.
+     prefill_token_ids: list[int] | None = None
+ 
++    # lambda de la proyeccion rank-1 para ESTA peticion, derivado de cache_salt
++    # ("refusal:<float>"). None = usar el lambda global del servidor.
++    refusal_lambda: float | None = None
++
+     @classmethod
+     def from_request(
+         cls,
+@@ -62,6 +70,7 @@
+             prompt_embeds=request.prompt_embeds,
+             prompt_is_token_ids=request.prompt_is_token_ids,
+             prefill_token_ids=prefill_token_ids,
++            refusal_lambda=parse_refusal_lambda(request.cache_salt),
+         )
+ 
+     def __repr__(self) -> str:
+diff -uNr src/v1/worker/gpu/model_runner.py src-patched/v1/worker/gpu/model_runner.py
+--- src/v1/worker/gpu/model_runner.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/v1/worker/gpu/model_runner.py	2026-08-12 18:43:01.829978541 +0200
+@@ -87,6 +87,8 @@
+     KVConnector,
+     get_kv_connector,
+ )
++from vllm import refusal_projection
++from vllm.v1.worker.gpu.refusal_utils import RefusalState
+ from vllm.v1.worker.gpu.lora_utils import (
+     LoraState,
+     create_lora_capture_hook,
+@@ -240,6 +242,12 @@
+ 
+         # LoRA-related workers.
+         self.lora_state = LoraState(max_num_reqs=self.max_num_reqs)
++        # Lambda por peticion de la proyeccion rank-1 (de cache_salt).
++        self.refusal_state = RefusalState(
++            max_num_reqs=self.max_num_reqs,
++            max_num_tokens=self.max_num_tokens,
++            device=self.device,
++        )
+         self.lora_capture_cases = [0]
+         if self.lora_config:
+             self.lora_capture_cases = get_lora_capture_cases(
+@@ -740,6 +748,7 @@
+         if self.prompt_logprobs_worker is not None:
+             self.prompt_logprobs_worker.remove_request(req_id)
+         self.lora_state.remove_request(req_id)
++        self.refusal_state.remove_request(req_idx)
+         return True
+ 
+     def finish_requests(self, scheduler_output: SchedulerOutput) -> None:
+@@ -793,6 +802,9 @@
+                 req_index, new_req_data.block_ids, overwrite=True
+             )
+             self.lora_state.add_request(req_id, req_index, new_req_data.lora_request)
++            self.refusal_state.add_request(
++                req_index, getattr(new_req_data, "refusal_lambda", None)
++            )
+ 
+             if self.is_last_pp_rank and new_req_data.sampling_params is not None:
+                 assert self.sampler is not None
+@@ -1192,6 +1204,19 @@
+                     input_batch.num_scheduled_tokens,
+                 )
+                 self._set_active_loras(*lora_inputs)
++
++            # Lambda por token de la proyeccion rank-1. Mismo idx_mapping y
++            # mismo num_scheduled_tokens que LoRA: una peticion con cache_salt
++            # propio afecta solo a SUS tokens dentro del lote.
++            if refusal_projection.is_enabled():
++                refusal_projection.set_per_token_lambda(
++                    self.refusal_state.make_token_lambdas(
++                        input_batch.idx_mapping_np,
++                        input_batch.num_scheduled_tokens,
++                        refusal_projection.get_lambda(),
++                        batch_desc.num_tokens,
++                    )
++                )
+         else:
+             # No actual tokens to run. A dummy run for DP or memory profiling.
+             input_batch = InputBatch.make_dummy(
+diff -uNr src/v1/worker/gpu/refusal_utils.py src-patched/v1/worker/gpu/refusal_utils.py
+--- src/v1/worker/gpu/refusal_utils.py	1970-01-01 01:00:00.000000000 +0100
++++ src-patched/v1/worker/gpu/refusal_utils.py	2026-08-12 18:43:01.828978513 +0200
+@@ -0,0 +1,70 @@
++# SPDX-License-Identifier: Apache-2.0
++"""Estado por peticion del lambda de la proyeccion rank-1, para el Model Runner V2.
++
++POR QUE EXISTE ESTE FICHERO: el parche original solo toco
++`v1/worker/gpu_model_runner.py`, que es el runner **V1**. Este despliegue arranca
++con el **V2** (`gpu_worker.py` loguea "Using V2 Model Runner"), que vive en el
++paquete `v1/worker/gpu/`. Resultado: el tensor por token nunca se construia y el
++hook caia siempre al lambda global — el dial global funcionaba y la seleccion por
++peticion no hacia absolutamente nada, en silencio.
++
++Esta calcado de `LoraState` (lora_utils.py), que resuelve el mismo problema:
++un valor por peticion que hay que expandir a por token con el mismo
++`idx_mapping` / `num_scheduled_tokens` del lote.
++"""
++
++from __future__ import annotations
++
++import numpy as np
++import torch
++
++# NaN = la peticion no trajo lambda propio -> usa el global del servidor.
++NO_LAMBDA = np.nan
++
++
++class RefusalState:
++    def __init__(self, max_num_reqs: int, max_num_tokens: int, device: torch.device):
++        self.lambdas = np.full(max_num_reqs, NO_LAMBDA, dtype=np.float32)
++        # Buffer PERSISTENTE: con grafos CUDA el puntero se hornea en la captura,
++        # asi que no puede ser una asignacion nueva por paso. Se crea fuera de
++        # inference_mode por la misma razon que el tensor de lambda global: un
++        # tensor nacido en inference mode no admite mutacion in-place despues.
++        with torch.inference_mode(False):
++            self._buf = torch.zeros(max_num_tokens, dtype=torch.float32, device=device)
++
++    def add_request(self, req_index: int, refusal_lambda: float | None) -> None:
++        self.lambdas[req_index] = NO_LAMBDA if refusal_lambda is None else refusal_lambda
++
++    def remove_request(self, req_index: int) -> None:
++        # El slot se reutiliza; dejarlo limpio evita que una peticion nueva herede
++        # el modo de la anterior si algun camino no llamara a add_request.
++        self.lambdas[req_index] = NO_LAMBDA
++
++    def make_token_lambdas(
++        self,
++        idx_mapping: np.ndarray,
++        num_scheduled_tokens: np.ndarray,
++        global_lambda: float,
++        num_tokens_padded: int,
++    ) -> torch.Tensor:
++        """Vista [num_tokens_padded] del buffer con el lambda de cada token.
++
++        `num_tokens_padded` NO es opcional y es el detalle que costo dos ciclos de
++        build: el forward corre sobre `batch_desc.num_tokens`, que viene PADEADO
++        para los grafos CUDA (model_runner.py: is_padding[num_tokens:
++        num_tokens_after_padding]). Devolver un tensor del tamano real hace que no
++        cuadre con `y` en el hook, y el hook caia al lambda global en silencio.
++
++        Las filas de padding se rellenan con el lambda global: da igual lo que
++        lleven porque se descartan, pero no pueden quedar sin inicializar.
++        """
++        lam = self.lambdas[idx_mapping]
++        lam = np.where(np.isnan(lam), np.float32(global_lambda), lam)
++        tok = np.repeat(lam, num_scheduled_tokens)
++        n = int(tok.shape[0])
++        assert n <= num_tokens_padded, (n, num_tokens_padded)
++        with torch.inference_mode(False):
++            self._buf[:n].copy_(torch.from_numpy(tok), non_blocking=True)
++            if num_tokens_padded > n:
++                self._buf[n:num_tokens_padded].fill_(float(global_lambda))
++        return self._buf[:num_tokens_padded]
+diff -uNr src/v1/worker/gpu_input_batch.py src-patched/v1/worker/gpu_input_batch.py
+--- src/v1/worker/gpu_input_batch.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/v1/worker/gpu_input_batch.py	2026-08-12 18:22:28.547152593 +0200
+@@ -49,6 +49,9 @@
+     xdrope_positions: torch.Tensor | None = None
+ 
+     lora_request: LoRARequest | None = None
++    # lambda de la proyeccion rank-1 de esta peticion (de cache_salt).
++    # None = usar el lambda global del servidor.
++    refusal_lambda: float | None = None
+     prompt_embeds: torch.Tensor | None = None
+     # To accumulate prompt logprobs tensor chunks across prefill steps.
+     in_progress_prompt_logprobs_cpu: LogprobsTensors | None = None
+@@ -244,6 +247,10 @@
+ 
+         # lora related
+         self.request_lora_mapping = np.zeros((self.max_num_reqs,), dtype=np.int64)
++        # NaN = la peticion no trae lambda propio -> usa el global.
++        self.request_refusal_lambda = np.full(
++            (self.max_num_reqs,), np.nan, dtype=np.float32
++        )
+         self.lora_id_to_request_ids: dict[int, set[str]] = {}
+         self.lora_id_to_lora_request: dict[int, LoRARequest] = {}
+ 
+@@ -479,6 +486,10 @@
+             # No LoRA
+             self.request_lora_mapping[req_index] = 0
+ 
++        self.request_refusal_lambda[req_index] = (
++            np.nan if request.refusal_lambda is None else request.refusal_lambda
++        )
++
+         return req_index
+ 
+     def update_req_spec_token_ids(
+@@ -628,6 +639,10 @@
+ 
+         self.block_table.swap_row(i1, i2)
+ 
++        self.request_refusal_lambda[i1], self.request_refusal_lambda[i2] = (
++            self.request_refusal_lambda[i2],
++            self.request_refusal_lambda[i1],
++        )
+         self.request_lora_mapping[i1], self.request_lora_mapping[i2] = (
+             self.request_lora_mapping[i2],
+             self.request_lora_mapping[i1],
+diff -uNr src/v1/worker/gpu_model_runner.py src-patched/v1/worker/gpu_model_runner.py
+--- src/v1/worker/gpu_model_runner.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/v1/worker/gpu_model_runner.py	2026-08-12 18:22:28.548152623 +0200
+@@ -49,6 +49,7 @@
+     is_global_first_rank,
+     prepare_communication_buffer_for_model,
+ )
++from vllm import refusal_projection
+ from vllm.forward_context import (
+     BatchDescriptor,
+     set_forward_context,
+@@ -763,6 +764,11 @@
+             self.max_num_reqs, dtype=torch.int32
+         )
+         self.req_indices = self._make_buffer(self.max_num_tokens, dtype=torch.int64)
++        # lambda de la proyeccion rank-1 por token. Buffer persistente por la
++        # misma razon que los demas: con grafos CUDA el puntero se hornea.
++        self.refusal_lambda_buf = self._make_buffer(
++            self.max_num_tokens, dtype=torch.float32
++        )
+         # Maps current batch position -> previous batch position (-1 for new reqs)
+         self.prev_positions = self._make_buffer(self.max_num_reqs, dtype=torch.int64)
+         self.num_scheduled_tokens = self._make_buffer(
+@@ -1259,6 +1265,7 @@
+                 num_computed_tokens=new_req_data.num_computed_tokens,
+                 output_token_ids=[],
+                 lora_request=new_req_data.lora_request,
++                refusal_lambda=new_req_data.refusal_lambda,
+             )
+             self.requests[req_id] = req_state
+             self.late_interaction_runner.register_request(req_id, pooling_params)
+@@ -1936,6 +1943,22 @@
+         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
+         req_indices = np.repeat(self.arange_np[:num_reqs], num_scheduled_tokens)
+ 
++        # lambda por token: se expande el valor por peticion con el MISMO
++        # req_indices. NaN (la peticion no pidio lambda propio) se sustituye por
++        # el global, asi que el comportamiento por defecto no cambia.
++        if refusal_projection.is_enabled():
++            lam_req = self.input_batch.request_refusal_lambda[:num_reqs]
++            lam_tok = lam_req[req_indices]
++            np.nan_to_num(
++                lam_tok, copy=False, nan=refusal_projection.get_lambda()
++            )
++            n_tok = int(lam_tok.shape[0])
++            self.refusal_lambda_buf.np[:n_tok] = lam_tok
++            self.refusal_lambda_buf.copy_to_gpu(n_tok)
++            refusal_projection.set_per_token_lambda(
++                self.refusal_lambda_buf.gpu[:n_tok]
++            )
++
+         # cu_num_tokens: [2, 5, 3] -> [2, 7, 10]
+         # self.query_pos.np[:10]: [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
+         cu_num_tokens = self._get_cumsum_and_arange(
+diff -uNr src/v1/worker/gpu_worker.py src-patched/v1/worker/gpu_worker.py
+--- src/v1/worker/gpu_worker.py	2026-07-15 01:45:53.000000000 +0200
++++ src-patched/v1/worker/gpu_worker.py	2026-08-12 18:22:28.548152623 +0200
+@@ -184,6 +184,32 @@
+             )
+         return self._sleep_mode_backend
+ 
++    def set_refusal_lambda(self, value: float) -> float:
++        """Fija lambda de la proyeccion rank-1 en ESTE rank. Se invoca por
++        collective_rpc, igual que sleep/wake_up.
++
++        Con el executor `mp` y TP=2, cambiar lambda en el proceso del head NO
++        llega al worker: hay que ir por collective_rpc a todos los ranks. Cada
++        rank devuelve el valor que aplico para que el llamante confirme que los
++        dos coinciden antes de dar OK.
++
++        La mutacion es in-place sobre el tensor en device (`fill_`), asi que es
++        segura con los grafos CUDA ya capturados.
++        """
++        from vllm.refusal_projection import set_lambda
++
++        applied = set_lambda(float(value))
++        logger.info("refusal lambda = %s (rank %s)", applied, self.rank)
++        return applied
++
++    def get_refusal_lambda(self) -> float:
++        """Lee lambda de ESTE rank. Tambien por collective_rpc: el frontend no
++        comparte proceso con los workers, asi que su copia local no vale como
++        fuente de verdad."""
++        from vllm.refusal_projection import get_lambda
++
++        return get_lambda()
++
+     def sleep(self, level: int = 1) -> None:
+         torch.accelerator.synchronize()
+         free_bytes_before_sleep = torch.accelerator.get_memory_info()[0]

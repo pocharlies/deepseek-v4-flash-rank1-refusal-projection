@@ -1,0 +1,33 @@
+  rep1 lambda=0.0  acceptance=0.5648 tok_s=57.87
+  rep1 lambda=1.5  acceptance=0.5687 tok_s=57.07
+  rep2 lambda=0.0  acceptance=0.5688 tok_s=57.02
+  rep2 lambda=1.5  acceptance=0.5616 tok_s=34.28
+  rep3 lambda=0.0  acceptance=0.5663 tok_s=40.52
+  rep3 lambda=1.5  acceptance=0.5889 tok_s=58.74
+  rep4 lambda=0.0  acceptance=0.5622 tok_s=57.64
+  rep4 lambda=1.5  acceptance=0.556 tok_s=57.6
+  rep5 lambda=0.0  acceptance=0.5841 tok_s=58.29
+  rep5 lambda=1.5  acceptance=0.5307 tok_s=42.25
+  rep6 lambda=0.0  acceptance=0.555 tok_s=56.82
+  rep6 lambda=1.5  acceptance=0.5588 tok_s=57.02
+  lambda=0.0: niah={'hits': 30, 'n': 30, 'invalid': 0} tooling==== SCORE TOOL-CALLING: 8/8 ===
+  lambda=1.5: niah={'hits': 30, 'n': 30, 'invalid': 0} tooling==== SCORE TOOL-CALLING: 8/8 ===
+
+==========================================================================
+metrica                           l=0.0            l=1.5   t
+==========================================================================
+acceptance (code)         0.5669±0.0097    0.5608±0.0189   +0.70
+acceptance (variado)      0.4747±0.0122    0.4762±0.0202   -0.15
+accept_len                3.8338±0.0482    3.7992±0.0949   +0.80
+tok/s codigo             54.6933±6.9646  51.1600±10.3201   +0.70
+tok/s variado            46.3350±5.6823   46.8900±6.1595   -0.16
+TTFT mediana              0.2265±0.0350    0.2362±0.0400   -0.45
+--------------------------------------------------------------------------
+NIAH l=0.0             30/30 (invalidas 0)
+tool-calling l=0.0     === SCORE TOOL-CALLING: 8/8 ===
+NIAH l=1.5             30/30 (invalidas 0)
+tool-calling l=1.5     === SCORE TOOL-CALLING: 8/8 ===
+
+|t| < 2 => indistinguible. Suelo de acceptance: 0.55
+tiempo total: 83.4 min
+escrito compare_full.json

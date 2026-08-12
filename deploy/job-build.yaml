@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rank1-image-build
+  namespace: buildkit
+  labels:
+    rank1.dgx-infra/window: refusal-dirs-20260812
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: rank1-image-build
+    spec:
+      restartPolicy: Never
+      # El CONTEXTO de build vive en nvidia-dgx (~/rank1-build), asi que el cliente
+      # buildctl tiene que correr ahi. El DAEMON esta en gx10-ec3d y le da igual:
+      # buildctl le manda el contexto por la red.
+      nodeSelector:
+        kubernetes.io/hostname: nvidia-dgx
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: buildctl
+          # Misma imagen que el propio buildkitd: trae buildctl y es arm64.
+          image: docker.io/moby/buildkit:v0.31.0-rootless
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "contexto:"; ls -la /ctx
+              buildctl --addr tcp://buildkitd-arm64.buildkit.svc.cluster.local:1234 \
+                build \
+                --frontend dockerfile.v0 \
+                --local context=/ctx \
+                --local dockerfile=/ctx \
+                --output type=image,name=registry.lan.internal/homelab/dspark-vllm-gx10:0.1.1-rank1f,push=true \
+                --progress plain
+              echo "RANK1-BUILD-DONE"
+          env:
+            - { name: BUILDKIT_HOST, value: "tcp://buildkitd-arm64.buildkit.svc.cluster.local:1234" }
+            - { name: DOCKER_CONFIG, value: "/dockercfg" }
+          resources:
+            requests: { cpu: "500m", memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+          volumeMounts:
+            - { name: ctx, mountPath: /ctx, readOnly: true }
+            - { name: dockercfg, mountPath: /dockercfg, readOnly: true }
+      volumes:
+        - name: ctx
+          hostPath: { path: /home/<user>/rank1-build, type: Directory }
+        - name: dockercfg
+          secret:
+            secretName: registry-push-lan
+            items:
+              - key: .dockerconfigjson
+                path: config.json
