@@ -28,13 +28,15 @@ hf upload "$REPO_ID" ./hf . --repo-type model --exclude "upload.sh" \
 
 echo "==> published: https://huggingface.co/$REPO_ID"
 
-# Cross-link GitHub -> Hugging Face
-if grep -q "HF_REPO_PLACEHOLDER" README.md; then
-  sed -i "s|HF_REPO_PLACEHOLDER|$REPO_ID|g" README.md
+# Cross-link GitHub -> Hugging Face, at the anchor left in README.md
+if grep -q "<!-- HF_LINK_ANCHOR -->" README.md; then
+  sed -i "s|<!-- HF_LINK_ANCHOR -->|Published at [\`$REPO_ID\`](https://huggingface.co/$REPO_ID).|" README.md
   git add README.md
   git commit -q -m "Link Hugging Face repo $REPO_ID"
   git push -q origin main
-  echo "==> GitHub README now links to the Hugging Face repo"
+  echo "==> GitHub README now links to https://huggingface.co/$REPO_ID"
+else
+  echo "==> anchor already replaced; add the link to README.md by hand if needed"
 fi
 
 echo

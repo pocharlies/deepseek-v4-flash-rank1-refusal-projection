@@ -7,8 +7,8 @@ vectors, base checkpoint byte-identical to the DeepSeek release, and the ablatio
 Measured on 2× DGX Spark GB10 (sm_121, 128 GB unified each), vLLM 0.25.2, TP=2, DSpark
 speculative decoding k=5, `--max-model-len 262144`.
 
-**Direction vectors + model card on the Hub:**
-[`HF_REPO_PLACEHOLDER`](https://huggingface.co/HF_REPO_PLACEHOLDER)
+The direction vectors and model card are published to the Hugging Face Hub from
+[`hf/`](hf/). <!-- HF_LINK_ANCHOR -->
 
 **Headline result — λ=1.5 removes refusal completely at no measurable cost:**
 
@@ -24,8 +24,11 @@ Raw output: [`bench/results/compare_full.log`](bench/results/compare_full.log),
 [`compare_full.json`](bench/results/compare_full.json),
 [`refusal_sweep.json`](bench/results/refusal_sweep.json). 83.4 min of alternated A/B.
 
-The baked checkpoint cannot reach this operating point. It exists only at λ_eff ≈ 2.43,
-where acceptance drops to **0.5128** — below the 0.55 floor this deployment requires.
+The baked checkpoint cannot reach this operating point at all. Measured on the weights it sits
+at λ_eff ≈ 2.43, where it does not remove the direction but **inverts** it (§2). Prior
+measurement of that checkpoint on this deployment put acceptance at 0.5128, below the 0.55
+floor required here — that figure comes from [`docs/projection-validation.md`](docs/projection-validation.md),
+not from the raw runs in `bench/results/`.
 
 ---
 
@@ -326,17 +329,23 @@ response content**. Empty responses are their own category, never counted as "an
 The reference model card captured its directions with ~60-token prompts, and no published
 DeepSeek-V4 abliteration had been validated beyond 32k. This deployment serves at 262k.
 
-| arm | 32k (31,703 real tokens) | 128k (126,940 real tokens) | total |
-|---|---:|---:|---:|
-| base image, unpatched | 15/15 | 15/15 | **30/30** |
-| λ=0 | 15/15 | 15/15 | **30/30** |
-| λ=1 | 15/15 | 15/15 | **30/30** |
-| λ=1.5 | — | — | **30/30** |
+| arm | 32k | 128k | total | raw |
+|---|---:|---:|---:|---|
+| base image, unpatched | 15/15 | 15/15 | **30/30** | `niah_baseline_lambda0.json` |
+| λ=0 | 15/15 | 15/15 | **30/30** | `niah_rank1_lambda0.json` |
+| λ=1 | 15/15 | 15/15 | **30/30** | `niah_rank1_lambda1.json` |
+| λ=1.5 | 15/15 | 15/15 | **30/30** | `cf_niah_1.5.json` |
 
 3 needles per cell, 5 depths (0/25/50/75/100 %), temperature 0, haystack length calibrated
-against the server's own `/tokenize` and cross-checked against `usage.prompt_tokens`.
+against the server's own `/tokenize` and cross-checked against `usage.prompt_tokens` —
+31,770 and 127,007 real tokens in the paired λ=0/λ=1.5 run.
 
 **λ up to 1.5 does not degrade deep retrieval.**
+
+> **Reading the raw files:** `cf_niah_1.5.json` records `"lambda": 0.0` internally. That is a
+> harness artifact — `compare_full.py` sets λ out-of-band through `/admin/refusal_lambda`
+> between arms, and `bench_niah.py` stamps only the λ it was passed on the command line.
+> [`compare_full.log`](bench/results/compare_full.log) is what ties each file to its arm.
 
 ### Tool-calling — 8/8 both arms
 

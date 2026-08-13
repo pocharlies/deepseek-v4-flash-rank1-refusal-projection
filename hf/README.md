@@ -40,8 +40,10 @@ Measured on 2× DGX Spark GB10 (sm_121), vLLM 0.25.2, TP=2, DSpark speculative d
 83.4 minutes of alternated A/B on the same pod, same day, same load. Every number above is
 backed by raw JSON in the GitHub repo under `bench/results/`.
 
-**The baked checkpoint cannot reach this operating point.** It exists only at λ_eff ≈ 2.43,
-where acceptance falls to **0.5128** — below the 0.55 floor this deployment requires.
+**The baked checkpoint cannot reach this operating point at all.** Measured on the weights,
+it sits at λ_eff ≈ 2.43 — it does not remove the direction, it inverts it (see below). Prior
+measurement of that checkpoint on this deployment put acceptance at 0.5128, below the 0.55
+floor required here.
 
 ---
 
@@ -178,18 +180,25 @@ Control surface: `POST /admin/refusal_lambda {"lambda": 1.5}`. The router only m
 
 ## Calibration
 
-| λ | refusal rate | acceptance | NIAH 128k |
+| λ | refusal rate | acceptance | NIAH 32k + 128k |
 |---:|---:|---:|---:|
-| 0 | 90 % | 0.5669 ± 0.0097 (n=6) † | 30/30 |
-| 1 | 50–70 % | 0.5635 (n=6) ‡ | 30/30 |
-| **1.5** | **0 %** | **0.5608 ± 0.0189 (n=6)** † | **30/30** |
-| 2 | 0 % | — | — |
-| ~2.43 (baked) | — | **0.5128** ‡ | not measured |
+| 0 | 90 % | **0.5669 ± 0.0097** (n=6) | 30/30 |
+| 1 | 50–70 % | see note | 30/30 |
+| **1.5** | **0 %** | **0.5608 ± 0.0189** (n=6) | **30/30** |
+| 2 | 0 % | not measured | not measured |
 
-† per-run raw JSON in the repo (`bench/results/cf_speed_*.json`, `compare_full.log`) —
-the λ=0 vs λ=1.5 arms were run alternated in one 83.4-minute session.
-‡ from the working report `docs/projection-validation.md`; the per-run JSON for these
-arms is not in the published set.
+Every figure in this table has per-run raw JSON in the GitHub repo under `bench/results/`.
+The λ=0 and λ=1.5 acceptance arms were run **alternated** in a single 83.4-minute session
+(`compare_full.log`), which is what makes them comparable — this box drifts, and two λ=0 runs
+in the same session came in at 57.87 and 40.52 tok/s.
+
+**On the λ=1 arm and the baked baseline.** An earlier working report
+(`docs/projection-validation.md`) records acceptance 0.5635 at λ=1 and 0.5128 for the baked
+checkpoint at λ_eff ≈ 2.43. Both are real prior measurements, but their per-run JSON is not in
+the published set, and that report's λ=1.5 figure (n=3) was superseded five hours later by the
+n=6 alternated run above. Treat the λ=1 and baked numbers as indicative, not as evidence of
+the same weight as the rest of this table. The λ=1 **refusal rate** is separately backed by
+`refusal_rate.json` and `refusal_sweep.json`.
 
 **It saturates at 1.5.** λ=2 adds nothing over 1.5 and only moves toward the baked regime,
 which does degrade. If you raise it, 1.5 is the point — never 2.
