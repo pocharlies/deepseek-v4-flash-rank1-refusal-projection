@@ -3,7 +3,7 @@
 # then cross-link the GitHub README back to it.
 #
 #   hf auth login                # once, needs a token with WRITE scope
-#   ./hf/upload.sh               # repo name defaults to <your-user>/deepseek-v4-flash-0731-refusal-directions
+#   ./hf/upload.sh               # repo name defaults to <your-user>/deepseek-v4-flash-0731-uncensored-abliterated-refusal-directions
 #   ./hf/upload.sh myorg/my-name # or pass an explicit repo id
 #
 set -euo pipefail
@@ -26,10 +26,24 @@ if [ -z "$WHO" ]; then
   exit 1
 fi
 
-REPO_ID="${1:-$WHO/deepseek-v4-flash-0731-refusal-directions}"
+REPO_ID="${1:-$WHO/deepseek-v4-flash-0731-uncensored-abliterated-refusal-directions}"
 echo "==> publishing to https://huggingface.co/$REPO_ID"
 
-hf repo create "$REPO_ID" --repo-type model -y 2>/dev/null || echo "    (repo already exists, updating)"
+# `hf repo create` is deprecated in favour of `hf repos create`; the old form also had
+# a `-y` flag that no longer exists. Try the new spelling first, fall back to the old.
+hf repos create "$REPO_ID" --type model --public 2>/dev/null \
+  || hf repo create "$REPO_ID" --repo-type model 2>/dev/null \
+  || echo "    (repo already exists, updating)"
+
+# The xet uploader needs a writable cache. A root-owned ~/.cache/huggingface/{hub,xet}
+# — common when models were first pulled by a root process — makes uploads die with
+# "OSError: I/O error: Permission denied (os error 13)". Redirect rather than chown.
+if [ ! -w "${HF_XET_CACHE:-$HOME/.cache/huggingface/xet}" ] 2>/dev/null; then
+  export HF_XET_CACHE="${TMPDIR:-/tmp}/hf-xet-cache-$(id -u)"
+  mkdir -p "$HF_XET_CACHE"
+  echo "    (xet cache not writable; using $HF_XET_CACHE)"
+fi
+
 hf upload "$REPO_ID" ./hf . --repo-type model --exclude "upload.sh" \
   --commit-message "Runtime rank-1 refusal projection: directions + measured A/B results"
 
