@@ -8,7 +8,7 @@ Measured on 2× DGX Spark GB10 (sm_121, 128 GB unified each), vLLM 0.25.2, TP=2,
 speculative decoding k=5, `--max-model-len 262144`.
 
 The direction vectors and model card are published to the Hugging Face Hub from
-[`hf/`](hf/). <!-- HF_LINK_ANCHOR -->
+[`hf/`](hf/). Published at [`pocharlies/deepseek-v4-flash-0731-refusal-directions`](https://huggingface.co/pocharlies/deepseek-v4-flash-0731-refusal-directions).
 
 **Headline result — λ=1.5 removes refusal completely at no measurable cost:**
 

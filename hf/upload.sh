@@ -13,8 +13,15 @@ GH_REPO="pocharlies/deepseek-v4-flash-rank1-refusal-projection"
 
 command -v hf >/dev/null || { echo "hf CLI not found: pip install -U huggingface_hub"; exit 1; }
 
-WHO=$(hf auth whoami 2>/dev/null | head -1 || true)
-if [ -z "$WHO" ] || [ "$WHO" = "Not logged in" ]; then
+# `hf auth whoami` prints e.g. "user=alice orgs=acme" (and may emit a "Logged in"
+# banner first). Pull the username out rather than trusting line order.
+WHOAMI=$(hf auth whoami 2>/dev/null || true)
+WHO=$(printf '%s\n' "$WHOAMI" | grep -oE 'user=[A-Za-z0-9._-]+' | head -1 | cut -d= -f2)
+if [ -z "$WHO" ]; then
+  # older CLIs print the bare username on its own line
+  WHO=$(printf '%s\n' "$WHOAMI" | grep -vE '^(✓|Logged in|orgs:|$)' | head -1 | tr -d '[:space:]')
+fi
+if [ -z "$WHO" ]; then
   echo "Not logged in. Run:  hf auth login   (token needs WRITE scope)"
   exit 1
 fi
