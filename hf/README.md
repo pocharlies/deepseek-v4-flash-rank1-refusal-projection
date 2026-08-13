@@ -121,12 +121,9 @@ same load; you just flip the dial between runs. That is how the numbers above we
 do this, and the drift is real: two λ=0 runs in that same session came in at 57.87 and
 40.52 tok/s.
 
-**4 · λ is per deployment, not per request.** A companion patch `0002` once claimed to make λ
-a per-request parameter. **It did not work and has been withdrawn** — it wired only vLLM's V1
-model runner (the V2 runner is the default), the speculative-decoding drafter can never match
-its token layout, and CUDA graph capture bakes in the global scalar. Per-request λ was
-silently a no-op. The isolation advice below therefore has to be enforced by running a
-**separate deployment** at λ>0, not by tagging individual requests.
+**4 · λ is per deployment, not per request.** One deployment serves one λ at a time, so the
+isolation advice below has to be enforced by running a **separate deployment** at λ>0, not by
+tagging individual requests.
 
 ### The two honest costs
 
