@@ -47,6 +47,64 @@ floor required here.
 
 ---
 
+## In plain terms: what this actually buys you
+
+**The usual way to run an abliterated model:** you download a second, complete copy of the
+model — a separate ~157 GB checkpoint. Now you keep two copies on disk (~313 GB), and they are
+mutually exclusive on the same GPUs. Want the normal model back? Stop the server, load 157 GB
+of different weights across both nodes, wait for it to come up. Every in-flight request dies.
+Want to compare the two on the same prompt? You do it hours apart, on different server
+processes, and hope nothing else drifted in between.
+
+**This way:** you download nothing extra. Your existing checkpoint stays exactly as it is, and
+this **757 KB** file sits next to it — about 2,000× smaller than the published 1.54 GB overlay,
+and roughly 220,000× smaller than a second copy of the model. One server process. Switching is
+one HTTP call:
+
+```bash
+curl -XPOST localhost:8888/admin/refusal_lambda -d '{"lambda": 1.5}'   # ablation on
+curl -XPOST localhost:8888/admin/refusal_lambda -d '{"lambda": 0}'     # ablation off
+```
+
+It takes effect on the **next request**. No restart. No reload. No second copy on disk. No
+downtime, and nothing to re-download.
+
+### Four things that follow
+
+**1 · "Off" genuinely means off.** λ=0 is *bit-exact* to the unmodified model — verified with
+`torch.equal`, not "close enough". You are not permanently running a modified model and hoping
+it behaves like the original on ordinary work; at zero it **is** the original. That is why the
+base weights stay byte-identical to the DeepSeek release and can be checked with sha256.
+
+**2 · It is a dial, not a switch.** λ=0 is stock, λ=1.5 removes refusal entirely, everything in
+between is available, and λ can go *negative* — making the model **more** reticent than stock,
+which no abliterated checkpoint can offer.
+
+**3 · A/B testing becomes honest.** Both arms run on the same process, same weights, same hour,
+same load; you just flip the dial between runs. That is how the numbers above were produced —
+6 alternated runs per arm in one 83.4-minute session. With two separate checkpoints you cannot
+do this, and the drift is real: two λ=0 runs in that same session came in at 57.87 and
+40.52 tok/s.
+
+**4 · You can route per request.** The companion patch `0002` makes λ a per-request parameter,
+so a single deployment can serve ablated and non-ablated traffic at once — which is what makes
+the isolation advice below enforceable rather than aspirational.
+
+### The two honest costs
+
+**Switching is instant, but the prefix cache for the new λ starts cold.** λ is part of the
+block hash key *deliberately* — reusing cached blocks across different λ would silently corrupt
+state, and that is the single most likely way to get this wrong. So the first request after a
+switch re-prefills its context. Measured on this hardware: **76.3 s for a 136,879-token
+prompt**, ~12.6 s at 16.7k tokens, negligible for short prompts. Steady-state traffic at a
+fixed λ caches normally and is unaffected.
+
+**λ=0 is free in output, not in compute.** The dot product and subtraction run in all 46 layers
+on every token regardless of λ, because branching on λ is exactly what breaks CUDA graph
+capture. For genuinely zero overhead, unset `VLLM_REFUSAL_DIRS` and restart.
+
+---
+
 ## What is in this repository
 
 ```
