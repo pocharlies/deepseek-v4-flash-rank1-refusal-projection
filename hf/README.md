@@ -4,6 +4,8 @@ license_name: deepseek
 license_link: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/blob/main/LICENSE
 base_model: deepseek-ai/DeepSeek-V4-Flash-0731
 tags:
+  - uncensored
+  - abliterated
   - abliteration
   - refusal-direction
   - activation-steering
@@ -13,11 +15,31 @@ tags:
 library_name: safetensors
 ---
 
-# DeepSeek-V4-Flash-0731 — runtime rank-1 refusal projection
+# DeepSeek-V4-Flash-0731 — Uncensored / Abliterated, switchable at runtime
 
-**757 KB of direction vectors instead of a 1.54 GB weight overlay.** Base checkpoint stays
-byte-identical to the DeepSeek release; the ablation strength λ becomes a dial you change at
-runtime with no restart and no reload.
+**An uncensored (abliterated) DeepSeek-V4-Flash without a second checkpoint, without
+reloading the model, and without swapping anything on disk.**
+
+Abliteration normally means downloading a whole separate ~157 GB model with the refusal
+behaviour permanently burned into its weights. This is the same effect delivered a different
+way: a **757 KB** file of direction vectors sits beside your existing checkpoint, and the
+uncensoring strength becomes a **dial you turn at runtime** — one HTTP call, effective on the
+next request, no restart, no reload, no downtime.
+
+```bash
+curl -XPOST localhost:8888/admin/refusal_lambda -d '{"lambda": 1.5}'   # uncensored
+curl -XPOST localhost:8888/admin/refusal_lambda -d '{"lambda": 0}'     # back to stock
+```
+
+At λ=1.5 the model refuses **0 out of 10** prompts it declined 9 out of 10 times at stock —
+with no measurable loss in speculative-decoding acceptance, long-context retrieval, or
+tool-calling. At λ=0 it is **bit-exact** to the unmodified DeepSeek release, so "off" is
+genuinely off rather than approximately off.
+
+Because it is a dial rather than a swap, it reaches an operating point **no published
+abliterated checkpoint can offer**: the baked edit does not merely remove the refusal
+direction, it overshoots and *inverts* it (~240 %), and that overshoot is what costs quality.
+The clean range in between only exists at runtime.
 
 Code, patches, benchmark harnesses and every raw result:
 **https://github.com/pocharlies/deepseek-v4-flash-rank1-refusal-projection**
@@ -47,7 +69,20 @@ floor required here.
 
 ---
 
-## In plain terms: what this actually buys you
+## In plain terms: the advantages over a normal abliterated model
+
+| | Baked abliterated checkpoint | This technique |
+|---|---|---|
+| Extra download | a second ~157 GB model | **757 KB** |
+| Disk | ~313 GB (two copies) | ~157 GB (one copy) |
+| Turning it off | stop server, reload other weights | **one HTTP call** |
+| Time to switch | full restart + weight load | **next request** |
+| Downtime when switching | yes, all in-flight requests die | **none** |
+| Is "off" really off? | you're on a different model | **bit-exact to stock** |
+| Strength | fixed at whatever was baked | **any value, live** |
+| More cautious than stock | impossible | λ < 0 |
+| Serve both at once | needs two deployments | **per-request λ** |
+| Base weights auditable | no, they're modified | **sha256 vs DeepSeek release** |
 
 **The usual way to run an abliterated model:** you download a second, complete copy of the
 model — a separate ~157 GB checkpoint. Now you keep two copies on disk (~313 GB), and they are
