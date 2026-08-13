@@ -71,9 +71,10 @@ repo were produced (6 alternated runs per arm in one 83.4-minute session). With 
 checkpoints you cannot do this, and the drift shows: two λ=0 runs in that same session came in
 at 57.87 and 40.52 tok/s.
 
-**4 · You can route per request.** With `patches/0002` λ becomes a per-request parameter, so
-one deployment can serve ablated and non-ablated traffic simultaneously — which is what makes
-the isolation in §10 enforceable rather than aspirational.
+**4 · λ is per deployment, not per request.** Per-request routing was attempted and
+**withdrawn** — see [Withdrawn: per-request λ](#withdrawn-per-request-λ). One deployment
+serves one λ at a time, so the isolation in §10 has to be enforced by running a separate
+deployment, not by tagging individual requests.
 
 ### The two honest costs
 
@@ -471,14 +472,54 @@ capable and more completely stripped of its ability to decline** than the baked 
 whose clumsiness incidentally limited how useful it was. **The better the dial works, the
 more the isolation matters.**
 
-Recommended, and the reason λ is per-request in
-[`patches/0002-per-request-lambda.patch`](patches/0002-per-request-lambda.patch):
+Recommended. Note these have to be enforced by **running a separate deployment at λ>0** —
+per-request routing is not available (see [Withdrawn: per-request λ](#withdrawn-per-request-λ)):
 
 - **λ>0 must not share credentials with write-capable tools.** Separate deployment or
   enforced λ=0 on any request whose context contains scraped content or inbound mail.
 - **Restrict the toolset when λ>0.** Read-only tools; no write path reachable from an
   ablated context.
 - **Keep `/admin/refusal_lambda` off the public ingress.** vLLM cannot enforce this.
+
+---
+
+## Withdrawn: per-request λ
+
+An earlier revision of this repository shipped `patches/0002-per-request-lambda.patch`
+and advertised λ as a per-request parameter, carried on `cache_salt` as `refusal:<float>`.
+**It did not work, and the patch has been removed from this repository.** If you applied
+it, per-request λ was silently doing nothing and every request was served at the global λ.
+
+Be precise about what "removed" means here: `patches/0001` is a consolidated patch and it
+**still installs the machinery** (`refusal_utils.py`, the per-token call site in the V2
+runner, `parse_request_lambda`). What is withdrawn is the *claim*, not the code. In the
+installed state that machinery is dormant and fail-safe — it falls back to the global λ for
+every request — and `cache_salt` values starting with `refusal:` are parsed but have no
+effect. Ripping it out of `0001` is a separate change that requires rebuilding the image;
+it has not been done.
+
+Three defects, found by reading the running image:
+
+1. **It wired the V1 model runner only.** vLLM logs `Using V2 Model Runner` by default; the
+   V2 runner lives in `vllm/v1/worker/gpu/` and was never touched, so the per-token tensor
+   was never built.
+2. **The draft model can never match.** With speculative decoding the target advances in
+   multiples of `1+k` and the drafter in multiples of `k` — disjoint sets. The projection
+   module is shared by both and reads one module-global tensor, so the drafter always falls
+   back to the global λ.
+3. **CUDA graphs bake in the global scalar.** Graph capture does not go through
+   `execute_model`, so the traced branch is the global-λ one. Under replay, per-request λ
+   neither applies nor warns. **Fixing the shapes alone does not revive it.**
+
+What is *not* wrong: routing λ on `cache_salt` is the right carrier — it already enters the
+block-0 extra keys, so requests at different λ correctly refuse to share cached prefixes.
+
+The global dial (`POST /admin/refusal_lambda`, `patches/0001`) is unaffected and is what
+every measurement in this README was taken with. **Isolate by deployment, not by request.**
+
+One caveat that does apply to the global dial: change λ while the model is **idle**. The λ
+hash key is written only at the first block of a request, so moving the dial mid-flight
+publishes later blocks computed at the new λ under a chain asserting the old one.
 
 ---
 
@@ -499,7 +540,6 @@ python3 tools/verify_projection.py --out docs/verify-projection.json
 
 # 3 — patch and build
 patch -p1 < patches/0001-rank1-projection.patch
-patch -p1 < patches/0002-per-request-lambda.patch   # optional: per-request λ
 python3 -m pytest tools/test_refusal_projection.py tools/test_admin_endpoint.py
 
 # 4 — serve
@@ -544,7 +584,7 @@ acceptance is 0 by construction.
 ```
 tools/      extraction, offline verification, spectral probe, tests
 vllm/       refusal_projection.py — the module the patch installs
-patches/    0001 runtime projection · 0002 per-request λ
+patches/    0001 runtime projection
 bench/      the four harnesses + compare drivers
 bench/results/  every raw JSON behind every number above
 docs/       phase reports (Spanish, as written) + raw metric dumps

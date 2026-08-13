@@ -81,7 +81,7 @@ floor required here.
 | Is "off" really off? | you're on a different model | **bit-exact to stock** |
 | Strength | fixed at whatever was baked | **any value, live** |
 | More cautious than stock | impossible | λ < 0 |
-| Serve both at once | needs two deployments | **per-request λ** |
+| Serve both at once | needs two deployments | needs two deployments (see §4) |
 | Base weights auditable | no, they're modified | **sha256 vs DeepSeek release** |
 
 **The usual way to run an abliterated model:** you download a second, complete copy of the
@@ -121,9 +121,12 @@ same load; you just flip the dial between runs. That is how the numbers above we
 do this, and the drift is real: two λ=0 runs in that same session came in at 57.87 and
 40.52 tok/s.
 
-**4 · You can route per request.** The companion patch `0002` makes λ a per-request parameter,
-so a single deployment can serve ablated and non-ablated traffic at once — which is what makes
-the isolation advice below enforceable rather than aspirational.
+**4 · λ is per deployment, not per request.** A companion patch `0002` once claimed to make λ
+a per-request parameter. **It did not work and has been withdrawn** — it wired only vLLM's V1
+model runner (the V2 runner is the default), the speculative-decoding drafter can never match
+its token layout, and CUDA graph capture bakes in the global scalar. Per-request λ was
+silently a no-op. The isolation advice below therefore has to be enforced by running a
+**separate deployment** at λ>0, not by tagging individual requests.
 
 ### The two honest costs
 
@@ -333,9 +336,9 @@ better the dial works, the more the isolation matters.
 
 If you wire this to tools with write access or feed it untrusted scraped content:
 
-- **λ>0 should not share credentials with write-capable tools** — separate deployment, or
-  enforced λ=0 on any request whose context contains untrusted content. This is why λ is
-  per-request in patch `0002`.
+- **λ>0 should not share credentials with write-capable tools** — this has to be a
+  **separate deployment**, since λ is per deployment and cannot be enforced per request
+  (see §4 above).
 - **Restrict the toolset when λ>0** to read-only paths.
 - **Keep `/admin/refusal_lambda` off the public ingress.**
 
