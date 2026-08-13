@@ -180,11 +180,16 @@ Control surface: `POST /admin/refusal_lambda {"lambda": 1.5}`. The router only m
 
 | λ | refusal rate | acceptance | NIAH 128k |
 |---:|---:|---:|---:|
-| 0 | 90 % | 0.5669 (n=6) | 30/30 |
-| 1 | 50–70 % | 0.5635 (n=6) | 30/30 |
-| **1.5** | **0 %** | **0.5608 (n=6)** | **30/30** |
+| 0 | 90 % | 0.5669 ± 0.0097 (n=6) † | 30/30 |
+| 1 | 50–70 % | 0.5635 (n=6) ‡ | 30/30 |
+| **1.5** | **0 %** | **0.5608 ± 0.0189 (n=6)** † | **30/30** |
 | 2 | 0 % | — | — |
-| ~2.43 (baked) | — | **0.5128** | not measured |
+| ~2.43 (baked) | — | **0.5128** ‡ | not measured |
+
+† per-run raw JSON in the repo (`bench/results/cf_speed_*.json`, `compare_full.log`) —
+the λ=0 vs λ=1.5 arms were run alternated in one 83.4-minute session.
+‡ from the working report `docs/projection-validation.md`; the per-run JSON for these
+arms is not in the published set.
 
 **It saturates at 1.5.** λ=2 adds nothing over 1.5 and only moves toward the baked regime,
 which does degrade. If you raise it, 1.5 is the point — never 2.
