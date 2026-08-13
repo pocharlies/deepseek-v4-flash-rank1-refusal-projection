@@ -53,7 +53,7 @@ curl -XPOST localhost:8888/admin/refusal_lambda -d '{"lambda": 0}'     # ablatio
 It takes effect on the **next request**. No restart. No reload. No second copy on disk. No
 downtime, and nothing to re-download.
 
-### Four things that follow from that
+### Three things that follow from that
 
 **1 · "Off" genuinely means off.** λ=0 is *bit-exact* to the unmodified model — verified with
 `torch.equal`, not "close enough". You are not permanently running a modified model and hoping
@@ -70,10 +70,6 @@ hour, same load — you flip the dial between runs. That is exactly how the meas
 repo were produced (6 alternated runs per arm in one 83.4-minute session). With two separate
 checkpoints you cannot do this, and the drift shows: two λ=0 runs in that same session came in
 at 57.87 and 40.52 tok/s.
-
-**4 · λ is per deployment, not per request.** One deployment serves one λ at a time, so the
-isolation in §10 has to be enforced by running a separate deployment at λ>0, not by tagging
-individual requests.
 
 ### The two honest costs
 
@@ -471,8 +467,7 @@ capable and more completely stripped of its ability to decline** than the baked 
 whose clumsiness incidentally limited how useful it was. **The better the dial works, the
 more the isolation matters.**
 
-Recommended. Note these have to be enforced by **running a separate deployment at λ>0**,
-since λ is a per-deployment setting and not a per-request one:
+Recommended:
 
 - **λ>0 must not share credentials with write-capable tools.** Separate deployment or
   enforced λ=0 on any request whose context contains scraped content or inbound mail.

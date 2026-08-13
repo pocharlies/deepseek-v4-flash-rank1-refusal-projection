@@ -81,7 +81,6 @@ floor required here.
 | Is "off" really off? | you're on a different model | **bit-exact to stock** |
 | Strength | fixed at whatever was baked | **any value, live** |
 | More cautious than stock | impossible | λ < 0 |
-| Serve both at once | needs two deployments | needs two deployments (see §4) |
 | Base weights auditable | no, they're modified | **sha256 vs DeepSeek release** |
 
 **The usual way to run an abliterated model:** you download a second, complete copy of the
@@ -104,7 +103,7 @@ curl -XPOST localhost:8888/admin/refusal_lambda -d '{"lambda": 0}'     # ablatio
 It takes effect on the **next request**. No restart. No reload. No second copy on disk. No
 downtime, and nothing to re-download.
 
-### Four things that follow
+### Three things that follow
 
 **1 · "Off" genuinely means off.** λ=0 is *bit-exact* to the unmodified model — verified with
 `torch.equal`, not "close enough". You are not permanently running a modified model and hoping
@@ -120,10 +119,6 @@ same load; you just flip the dial between runs. That is how the numbers above we
 6 alternated runs per arm in one 83.4-minute session. With two separate checkpoints you cannot
 do this, and the drift is real: two λ=0 runs in that same session came in at 57.87 and
 40.52 tok/s.
-
-**4 · λ is per deployment, not per request.** One deployment serves one λ at a time, so the
-isolation advice below has to be enforced by running a **separate deployment** at λ>0, not by
-tagging individual requests.
 
 ### The two honest costs
 
@@ -333,9 +328,7 @@ better the dial works, the more the isolation matters.
 
 If you wire this to tools with write access or feed it untrusted scraped content:
 
-- **λ>0 should not share credentials with write-capable tools** — this has to be a
-  **separate deployment**, since λ is per deployment and cannot be enforced per request
-  (see §4 above).
+- **λ>0 should not share credentials with write-capable tools** — use a separate deployment.
 - **Restrict the toolset when λ>0** to read-only paths.
 - **Keep `/admin/refusal_lambda` off the public ingress.**
 
