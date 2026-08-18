@@ -1,4 +1,4 @@
-diff -uNr src/entrypoints/serve/__init__.py src-patched/entrypoints/serve/__init__.py
+diff -ruN src/entrypoints/serve/__init__.py src-patched/entrypoints/serve/__init__.py
 --- src/entrypoints/serve/__init__.py	2026-07-15 01:45:53.000000000 +0200
 +++ src-patched/entrypoints/serve/__init__.py	2026-08-12 18:22:28.545152534 +0200
 @@ -31,6 +31,13 @@
@@ -15,7 +15,7 @@ diff -uNr src/entrypoints/serve/__init__.py src-patched/entrypoints/serve/__init
  
  def register_vllm_dev_api_routers(app: FastAPI):
      logger.warning(
-diff -uNr src/entrypoints/serve/refusal/api_router.py src-patched/entrypoints/serve/refusal/api_router.py
+diff -ruN src/entrypoints/serve/refusal/api_router.py src-patched/entrypoints/serve/refusal/api_router.py
 --- src/entrypoints/serve/refusal/api_router.py	1970-01-01 01:00:00.000000000 +0100
 +++ src-patched/entrypoints/serve/refusal/api_router.py	2026-08-12 18:22:28.546152564 +0200
 @@ -0,0 +1,102 @@
@@ -121,14 +121,14 @@ diff -uNr src/entrypoints/serve/refusal/api_router.py src-patched/entrypoints/se
 +        "publico."
 +    )
 +    app.include_router(router)
-diff -uNr src/entrypoints/serve/refusal/__init__.py src-patched/entrypoints/serve/refusal/__init__.py
+diff -ruN src/entrypoints/serve/refusal/__init__.py src-patched/entrypoints/serve/refusal/__init__.py
 --- src/entrypoints/serve/refusal/__init__.py	1970-01-01 01:00:00.000000000 +0100
 +++ src-patched/entrypoints/serve/refusal/__init__.py	2026-08-12 18:22:28.546152564 +0200
 @@ -0,0 +1 @@
 +# SPDX-License-Identifier: Apache-2.0
-diff -uNr src/models/deepseek_v4/attention.py src-patched/models/deepseek_v4/attention.py
+diff -ruN src/models/deepseek_v4/attention.py src-patched/models/deepseek_v4/attention.py
 --- src/models/deepseek_v4/attention.py	2026-07-15 06:12:17.000000000 +0200
-+++ src-patched/models/deepseek_v4/attention.py	2026-08-12 18:22:28.546152564 +0200
++++ src-patched/models/deepseek_v4/attention.py	2026-08-18 10:21:44.868517821 +0200
 @@ -46,6 +46,11 @@
  from vllm.model_executor.models.utils import extract_layer_index
  from vllm.models.deepseek_v4.common.rope import build_deepseek_v4_rope
@@ -136,12 +136,12 @@ diff -uNr src/models/deepseek_v4/attention.py src-patched/models/deepseek_v4/att
 +from vllm.refusal_projection import (
 +    RefusalProjection,
 +    is_enabled as refusal_is_enabled,
-+    resolve_direction as refusal_resolve_direction,
++    resolve as refusal_resolve,
 +)
  from vllm.utils.multi_stream_utils import (
      execute_in_parallel,
      maybe_execute_in_parallel,
-@@ -247,6 +252,16 @@
+@@ -247,6 +252,19 @@
              prefix=f"{prefix}.wo_b",
          )
  
@@ -151,14 +151,17 @@ diff -uNr src/models/deepseek_v4/attention.py src-patched/models/deepseek_v4/att
 +        # proyectar antes o despues de sumarlo.
 +        self.refusal_proj: nn.Module | None = None
 +        if refusal_is_enabled():
-+            r_hat = refusal_resolve_direction(prefix, config.num_hidden_layers)
++            # El ROL (target / draft) se fija aqui, por prefijo, con el mismo
++            # criterio que ya elige la direccion. Es lo que garantiza que este
++            # modulo lea el buffer de lambda de SU lado y no el del otro.
++            r_hat, role = refusal_resolve(prefix, config.num_hidden_layers)
 +            if r_hat is not None:
-+                self.refusal_proj = RefusalProjection(r_hat)
++                self.refusal_proj = RefusalProjection(r_hat, role)
 +
          # Initialize rotary embedding before the indexer/compressor consume it.
          self.rotary_emb = build_deepseek_v4_rope(
              config,
-@@ -376,7 +391,14 @@
+@@ -376,7 +394,14 @@
          o = o_padded[:, : self.n_local_heads, :]
  
          # Inverse-RoPE + wo_a + wo_b output projection (platform-specific).
@@ -174,10 +177,12 @@ diff -uNr src/models/deepseek_v4/attention.py src-patched/models/deepseek_v4/att
  
      def attn_gemm_parallel_execute(self, hidden_states) -> tuple[Any, ...]:
          aux_streams = self.aux_stream_list
-diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
+Binary files src/models/deepseek_v4/__pycache__/attention.cpython-312.pyc and src-patched/models/deepseek_v4/__pycache__/attention.cpython-312.pyc differ
+Binary files src/__pycache__/refusal_projection.cpython-312.pyc and src-patched/__pycache__/refusal_projection.cpython-312.pyc differ
+diff -ruN src/refusal_projection.py src-patched/refusal_projection.py
 --- src/refusal_projection.py	1970-01-01 01:00:00.000000000 +0100
-+++ src-patched/refusal_projection.py	2026-08-12 18:43:01.866979566 +0200
-@@ -0,0 +1,301 @@
++++ src-patched/refusal_projection.py	2026-08-18 11:30:32.909521843 +0200
+@@ -0,0 +1,466 @@
 +# SPDX-License-Identifier: Apache-2.0
 +"""Proyeccion ortogonal rank-1 en runtime sobre la salida de los sublayers de atencion.
 +
@@ -249,8 +254,45 @@ diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
 +#                      extra_body: {cache_salt: "refusal:1.0"}}
 +SALT_PREFIX = "refusal:"
 +
-+# Tensor [num_tokens] con el lambda de cada token del lote en curso. Lo rellena
-+# el model runner antes del forward; None = usar el escalar global.
++# --- ROLES -------------------------------------------------------------------
++#
++# El mismo modulo de atencion lo instancian DOS productores con layouts de fila
++# DISTINTOS e incompatibles, y ese es el defecto 1 del diagnostico:
++#
++#   target (backbone)  avanza en multiplos de 1+k  -> 6, 12, 18 con max_num_seqs=3
++#   drafter (DSpark)   avanza en multiplos de k    -> 5, 10, 15
++#
++# Son conjuntos DISJUNTOS: un unico vector por token no puede servir a los dos.
++# Cada rol tiene su propio buffer, y el rol se fija en la CONSTRUCCION a partir
++# del prefijo del modulo (lo mismo que ya discrimina `resolve_direction`), no por
++# heuristica en runtime. Asi una fila del drafter no puede leer nunca el lambda
++# de una peticion del target.
++ROLE_TARGET = 0
++ROLE_DRAFT = 1
++ROLE_NAMES = ("target", "draft")
++_N_ROLES = 2
++
++# Buffers PERSISTENTES por rol, [max_num_tokens] cada uno. Se crean UNA vez, en
++# el __init__ del runner -- o sea ANTES de capture_model, y ese orden no es un
++# detalle: es el arreglo del defecto 2.
++#
++# DEFECTO 2 (el que tumbaba el arreglo obvio): `capture_model` no pasa por
++# `execute_model`, asi que en la captura el slot por token estaba en None y la
++# rama que se trazaba DENTRO del grafo era el escalar global. En replay no corre
++# ni una linea de Python, asi que el decode servido por grafo aplicaba el global
++# para siempre, en silencio y sin un solo aviso.
++#
++# Con el buffer ya creado en la captura, lo que se hornea en el grafo es el
++# PUNTERO al buffer (offset 0, invariante para cualquier `buf[:n]`) y el tamano n
++# de ese grafo. En replay el kernel lee esa misma memoria, y el runner ya le ha
++# escrito los valores del paso in-place. Es exactamente el precedente que el
++# propio codigo documenta en dflash/speculator.py: "That buffer's address is what
++# the captured CUDA graph reads from at replay."
++_buf: list[torch.Tensor | None] = [None] * _N_ROLES
++
++# Slot LEGACY del Model Runner V1, que sigue fijando un tensor por paso
++# (gpu_model_runner.py:1958). El V1 no tiene buffers por rol; se conserva para no
++# romperlo. El V2 no lo usa.
 +_per_token: torch.Tensor | None = None
 +
 +
@@ -273,6 +315,86 @@ diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
 +
 +def get_per_token_lambda() -> torch.Tensor | None:
 +    return _per_token
++
++
++# --- API de los buffers por rol ---------------------------------------------
++#
++# La alineacion fila<->peticion es correcta POR CONSTRUCCION en cada rol:
++#   - target: fila i  <-> token i del lote           (repeat por num_scheduled_tokens)
++#   - draft:  fila i  <-> (peticion i//q, paso i%q)  (repeat por num_query_per_req)
++# Las filas de padding llevan el lambda global, asi que cualquier n >= n_real es
++# semanticamente correcta.
++
++
++def ensure_buffers(max_num_tokens: int, device: torch.device) -> None:
++    """Crea los buffers por rol. DEBE llamarse antes de `capture_model`.
++
++    Se inicializan al lambda global vigente: la captura traza el camino por
++    token pero leyendo un buffer NEUTRO, asi que capturar no cambia semantica.
++    `inference_mode(False)` por lo mismo que el tensor de lambda global: un
++    tensor nacido en inference mode no admite mutacion in-place despues.
++    """
++    if not is_enabled():
++        return
++    with _lock:
++        for role in (ROLE_TARGET, ROLE_DRAFT):
++            if _buf[role] is None:
++                with torch.inference_mode(False):
++                    _buf[role] = torch.full(
++                        (max_num_tokens,),
++                        float(_lam_value),
++                        dtype=torch.float32,
++                        device=device,
++                    )
++        logger.info(
++            "refusal projection: buffers por rol listos (%d tokens, %s)",
++            max_num_tokens,
++            device,
++        )
++
++
++def fill(role: int, tok: torch.Tensor, global_lambda: float) -> None:
++    """Escribe `tok` en las filas reales y el lambda global en el resto."""
++    buf = _buf[role]
++    if buf is None:
++        return
++    n = int(tok.shape[0])
++    cap = int(buf.shape[0])
++    if n > cap:
++        # Fail-safe: no recortamos datos reales. Se deja el buffer neutro y el
++        # forward vera el global. Nunca el lambda de otra peticion.
++        _warn_capacity(role, n, cap)
++        fill_neutral(role, global_lambda)
++        return
++    with torch.inference_mode(False):
++        buf[:n].copy_(tok, non_blocking=True)
++        if cap > n:
++            buf[n:].fill_(float(global_lambda))
++
++
++def fill_neutral(role: int, global_lambda: float) -> None:
++    """Todo el buffer al lambda global. Para dummy/profile runs.
++
++    Sin esto un dummy run lee el buffer RANCIO del paso real anterior — que es
++    exactamente el defecto que producia los pares `(16, 8192)` en el log.
++    """
++    buf = _buf[role]
++    if buf is None:
++        return
++    with torch.inference_mode(False):
++        buf.fill_(float(global_lambda))
++
++
++def view_for(role: int, n: int) -> torch.Tensor | None:
++    """Vista [n] del buffer del rol, o None para caer al lambda global."""
++    buf = _buf[role]
++    if buf is None:
++        return None
++    if n > int(buf.shape[0]):
++        _warn_capacity(role, n, int(buf.shape[0]))
++        return None
++    return buf[:n]
++
 +
 +# lam se cuantiza a entero para la clave de hash de bloque del prefix cache.
 +LAMBDA_HASH_SCALE = 1000
@@ -391,22 +513,39 @@ diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
 +    Devolver None deja la capa SIN hook (identidad) y se avisa por log: es preferible
 +    a adivinar y proyectar con la direccion de otra capa.
 +    """
++    return resolve(prefix, num_hidden_layers)[0]
++
++
++def resolve(prefix: str, num_hidden_layers: int) -> tuple[torch.Tensor | None, int]:
++    """Como `resolve_direction` pero devuelve tambien el ROL del modulo.
++
++    El rol sale del MISMO criterio que ya decide la clave, asi que no hay
++    heuristica nueva ni ambiguedad: `layers.N` con N < num_hidden_layers es
++    backbone (target); todo lo que cae en `mtp.*` — el drafter DSpark, que se
++    construye con `prefix=layers.{num_hidden_layers+i}`, y la ruta MTP — es
++    draft. Fijar el rol aqui, en la construccion, es lo que impide que un
++    modulo lea el buffer del otro rol en el forward.
++    """
 +    dirs = get_dirs()
 +    if dirs is None:
-+        return None
++        return None, ROLE_TARGET
 +
 +    parts = prefix.split(".")
 +    key = None
++    role = ROLE_TARGET
 +    for i, p in enumerate(parts):
 +        if p == "layers" and i + 1 < len(parts) and parts[i + 1].isdigit():
 +            n = int(parts[i + 1])
 +            if n < num_hidden_layers:
 +                key = f"layers.{n}.attn.wo_b"
++                role = ROLE_TARGET
 +            else:
 +                key = f"mtp.{n - num_hidden_layers}.attn.wo_b"
++                role = ROLE_DRAFT
 +            break
 +        if p == "mtp" and i + 1 < len(parts) and parts[i + 1].isdigit():
 +            key = f"mtp.{int(parts[i + 1])}.attn.wo_b"
++            role = ROLE_DRAFT
 +            break
 +
 +    if key is None or key not in dirs:
@@ -416,11 +555,32 @@ diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
 +            prefix,
 +            key,
 +        )
-+        return None
-+    return dirs[key]
++        return None, ROLE_TARGET
++    return dirs[key], role
 +
 +
 +_warned_shapes: set[tuple[int, int]] = set()
++_warned_capacity: set[tuple[int, int, int]] = set()
++
++
++def _warn_capacity(role: int, want: int, cap: int) -> None:
++    """El unico desajuste que sigue siendo posible con buffers por rol.
++
++    Si esto aparece, el lote pide mas filas de las que el buffer tiene: se cae
++    al lambda GLOBAL (fail-safe, nunca el lambda de otra peticion). Indica que
++    `max_num_tokens` no acota el forward de ese rol, que es un supuesto roto y
++    hay que mirarlo — no un caso normal.
++    """
++    key = (role, want, cap)
++    if key not in _warned_capacity:
++        _warned_capacity.add(key)
++        logger.warning(
++            "refusal projection: rol %s pide %d filas pero el buffer tiene %d; "
++            "se usa el lambda GLOBAL. La seleccion por peticion NO esta actuando.",
++            ROLE_NAMES[role],
++            want,
++            cap,
++        )
 +
 +
 +def _warn_shape_mismatch(got: int, want: int) -> None:
@@ -444,10 +604,12 @@ diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
 +    1,66e-3 contra 2,29e-3 haciendolo en bf16 -- mejora un 28%, y es gratis).
 +    """
 +
-+    def __init__(self, r_hat: torch.Tensor) -> None:
++    def __init__(self, r_hat: torch.Tensor, role: int = ROLE_TARGET) -> None:
 +        super().__init__()
 +        self.register_buffer("r_hat", r_hat.clone(), persistent=False)
 +        self._lam: torch.Tensor | None = None
++        # Rol FIJO desde la construccion (ver `resolve`). El forward no adivina.
++        self._role = role
 +
 +    def forward(self, y: torch.Tensor) -> torch.Tensor:
 +        if self._lam is None:
@@ -465,21 +627,29 @@ diff -uNr src/refusal_projection.py src-patched/refusal_projection.py
 +        r = self.r_hat
 +        proj = y.to(torch.float32) @ r                       # [num_tokens]
 +
-+        # lambda POR TOKEN si el runner lo ha puesto para este lote; si no, el
-+        # escalar global. El broadcast funciona igual con [num_tokens] que con
-+        # un escalar, asi que el kernel es el mismo en los dos casos.
-+        lam = get_per_token_lambda()
-+        if lam is not None and lam.shape[0] != proj.shape[0]:
-+            # NO silenciar esto. Este fallback existia sin aviso y oculto durante
-+            # dos ciclos de build que el tensor por token venia con los tokens
-+            # REALES mientras `y` llega PADEADO para los grafos CUDA: la seleccion
-+            # por peticion no hacia nada y no habia ni un error que lo delatara.
-+            _warn_shape_mismatch(lam.shape[0], proj.shape[0])
-+            lam = None
++        # Orden de preferencia del lambda:
++        #   1. buffer PERSISTENTE de mi rol, dimensionado a las filas que veo.
++        #      Es el unico camino que sobrevive al replay de grafo CUDA, porque
++        #      la vista se calcula aqui (en la traza) sobre un storage fijo.
++        #   2. slot `_per_token` legacy, que aun usa el Model Runner V1.
++        #   3. escalar global.
++        # El broadcast funciona igual con [num_tokens] que con un escalar, asi
++        # que el kernel es el mismo en los tres casos.
++        lam = view_for(self._role, proj.shape[0])
++        if lam is None:
++            lam = get_per_token_lambda()
++            if lam is not None and lam.shape[0] != proj.shape[0]:
++                # NO silenciar esto. Este fallback existia sin aviso y oculto
++                # durante dos ciclos de build que el tensor por token venia con
++                # los tokens REALES mientras `y` llega PADEADO para los grafos
++                # CUDA: la seleccion por peticion no hacia nada y no habia ni un
++                # error que lo delatara.
++                _warn_shape_mismatch(lam.shape[0], proj.shape[0])
++                lam = None
 +        if lam is None:
 +            lam = self._lam
 +        return y - (lam * proj).unsqueeze(-1).to(y.dtype) * r.to(y.dtype)
-diff -uNr src/v1/core/kv_cache_utils.py src-patched/v1/core/kv_cache_utils.py
+diff -ruN src/v1/core/kv_cache_utils.py src-patched/v1/core/kv_cache_utils.py
 --- src/v1/core/kv_cache_utils.py	2026-07-15 01:45:53.000000000 +0200
 +++ src-patched/v1/core/kv_cache_utils.py	2026-08-12 18:22:28.546152564 +0200
 @@ -15,6 +15,7 @@
@@ -528,7 +698,7 @@ diff -uNr src/v1/core/kv_cache_utils.py src-patched/v1/core/kv_cache_utils.py
      )
  
      if not extra_keys:
-diff -uNr src/v1/core/sched/output.py src-patched/v1/core/sched/output.py
+diff -ruN src/v1/core/sched/output.py src-patched/v1/core/sched/output.py
 --- src/v1/core/sched/output.py	2026-07-15 01:45:53.000000000 +0200
 +++ src-patched/v1/core/sched/output.py	2026-08-12 18:22:28.546152564 +0200
 @@ -5,6 +5,10 @@
@@ -561,9 +731,9 @@ diff -uNr src/v1/core/sched/output.py src-patched/v1/core/sched/output.py
          )
  
      def __repr__(self) -> str:
-diff -uNr src/v1/worker/gpu/model_runner.py src-patched/v1/worker/gpu/model_runner.py
+diff -ruN src/v1/worker/gpu/model_runner.py src-patched/v1/worker/gpu/model_runner.py
 --- src/v1/worker/gpu/model_runner.py	2026-07-15 01:45:53.000000000 +0200
-+++ src-patched/v1/worker/gpu/model_runner.py	2026-08-12 18:43:01.829978541 +0200
++++ src-patched/v1/worker/gpu/model_runner.py	2026-08-18 10:23:21.796235915 +0200
 @@ -87,6 +87,8 @@
      KVConnector,
      get_kv_connector,
@@ -604,7 +774,7 @@ diff -uNr src/v1/worker/gpu/model_runner.py src-patched/v1/worker/gpu/model_runn
  
              if self.is_last_pp_rank and new_req_data.sampling_params is not None:
                  assert self.sampler is not None
-@@ -1192,6 +1204,19 @@
+@@ -1192,7 +1204,25 @@
                      input_batch.num_scheduled_tokens,
                  )
                  self._set_active_loras(*lora_inputs)
@@ -612,22 +782,50 @@ diff -uNr src/v1/worker/gpu/model_runner.py src-patched/v1/worker/gpu/model_runn
 +            # Lambda por token de la proyeccion rank-1. Mismo idx_mapping y
 +            # mismo num_scheduled_tokens que LoRA: una peticion con cache_salt
 +            # propio afecta solo a SUS tokens dentro del lote.
++            #
++            # Solo se escribe el CONTENIDO del buffer persistente. La vista la
++            # calcula el forward, que es lo que hace que esto siga vivo cuando el
++            # lote lo sirve un grafo CUDA ya capturado.
 +            if refusal_projection.is_enabled():
-+                refusal_projection.set_per_token_lambda(
-+                    self.refusal_state.make_token_lambdas(
-+                        input_batch.idx_mapping_np,
-+                        input_batch.num_scheduled_tokens,
-+                        refusal_projection.get_lambda(),
-+                        batch_desc.num_tokens,
-+                    )
++                self.refusal_state.fill_target(
++                    input_batch.idx_mapping_np,
++                    input_batch.num_scheduled_tokens,
++                    refusal_projection.get_lambda(),
 +                )
          else:
++            # Dummy/profile run: los buffers de lambda al global. Sin esto se
++            # consume el contenido rancio del ultimo paso real.
++            if refusal_projection.is_enabled():
++                self.refusal_state.fill_neutral(refusal_projection.get_lambda())
              # No actual tokens to run. A dummy run for DP or memory profiling.
              input_batch = InputBatch.make_dummy(
-diff -uNr src/v1/worker/gpu/refusal_utils.py src-patched/v1/worker/gpu/refusal_utils.py
+                 batch_desc.num_reqs or num_reqs,
+@@ -1463,6 +1493,19 @@
+             if hasattr(self.model, "get_mtp_target_hidden_states"):
+                 pre_hc_hidden_states = self.model.get_mtp_target_hidden_states()
+                 spec_hidden_states = pre_hc_hidden_states[: hidden_states.shape[0]]  # type: ignore[union-attr]
++            # Lambda por peticion para el DRAFTER, antes de proponer. Tiene su
++            # propio buffer porque sus filas son num_reqs*q, disjuntas de las del
++            # target (multiplos de k frente a multiplos de 1+k). `q` lo publica el
++            # speculator (DFlash/DSpark); si no lo publicara, no se rellena y el
++            # drafter cae al lambda global.
++            if refusal_projection.is_enabled():
++                q = getattr(self.speculator, "num_query_per_req", None)
++                if q is not None:
++                    self.refusal_state.fill_draft(
++                        input_batch.idx_mapping_np,
++                        int(q),
++                        refusal_projection.get_lambda(),
++                    )
+             draft_tokens = self.speculator.propose(
+                 input_batch,
+                 attn_metadata,
+Binary files src/v1/worker/gpu/__pycache__/model_runner.cpython-312.pyc and src-patched/v1/worker/gpu/__pycache__/model_runner.cpython-312.pyc differ
+Binary files src/v1/worker/gpu/__pycache__/refusal_utils.cpython-312.pyc and src-patched/v1/worker/gpu/__pycache__/refusal_utils.cpython-312.pyc differ
+diff -ruN src/v1/worker/gpu/refusal_utils.py src-patched/v1/worker/gpu/refusal_utils.py
 --- src/v1/worker/gpu/refusal_utils.py	1970-01-01 01:00:00.000000000 +0100
-+++ src-patched/v1/worker/gpu/refusal_utils.py	2026-08-12 18:43:01.828978513 +0200
-@@ -0,0 +1,70 @@
++++ src-patched/v1/worker/gpu/refusal_utils.py	2026-08-18 10:21:32.624174562 +0200
+@@ -0,0 +1,100 @@
 +# SPDX-License-Identifier: Apache-2.0
 +"""Estado por peticion del lambda de la proyeccion rank-1, para el Model Runner V2.
 +
@@ -648,6 +846,8 @@ diff -uNr src/v1/worker/gpu/refusal_utils.py src-patched/v1/worker/gpu/refusal_u
 +import numpy as np
 +import torch
 +
++from vllm import refusal_projection
++
 +# NaN = la peticion no trajo lambda propio -> usa el global del servidor.
 +NO_LAMBDA = np.nan
 +
@@ -655,12 +855,12 @@ diff -uNr src/v1/worker/gpu/refusal_utils.py src-patched/v1/worker/gpu/refusal_u
 +class RefusalState:
 +    def __init__(self, max_num_reqs: int, max_num_tokens: int, device: torch.device):
 +        self.lambdas = np.full(max_num_reqs, NO_LAMBDA, dtype=np.float32)
-+        # Buffer PERSISTENTE: con grafos CUDA el puntero se hornea en la captura,
-+        # asi que no puede ser una asignacion nueva por paso. Se crea fuera de
-+        # inference_mode por la misma razon que el tensor de lambda global: un
-+        # tensor nacido en inference mode no admite mutacion in-place despues.
-+        with torch.inference_mode(False):
-+            self._buf = torch.zeros(max_num_tokens, dtype=torch.float32, device=device)
++        self.max_num_tokens = max_num_tokens
++        # Los buffers por rol se crean AQUI, en el __init__ del runner, porque
++        # esto corre mucho antes de `capture_model`. Si no existieran en la
++        # captura, el forward veria None y el grafo hornearia el lambda GLOBAL —
++        # que es exactamente el defecto que este arreglo elimina.
++        refusal_projection.ensure_buffers(max_num_tokens, device)
 +
 +    def add_request(self, req_index: int, refusal_lambda: float | None) -> None:
 +        self.lambdas[req_index] = NO_LAMBDA if refusal_lambda is None else refusal_lambda
@@ -670,35 +870,63 @@ diff -uNr src/v1/worker/gpu/refusal_utils.py src-patched/v1/worker/gpu/refusal_u
 +        # el modo de la anterior si algun camino no llamara a add_request.
 +        self.lambdas[req_index] = NO_LAMBDA
 +
-+    def make_token_lambdas(
++    def _per_req(self, idx_mapping: np.ndarray, global_lambda: float) -> np.ndarray:
++        """Lambda de cada peticion del lote, con NaN resuelto al global."""
++        lam = self.lambdas[idx_mapping]
++        return np.where(np.isnan(lam), np.float32(global_lambda), lam)
++
++    def fill_target(
 +        self,
 +        idx_mapping: np.ndarray,
 +        num_scheduled_tokens: np.ndarray,
 +        global_lambda: float,
-+        num_tokens_padded: int,
-+    ) -> torch.Tensor:
-+        """Vista [num_tokens_padded] del buffer con el lambda de cada token.
++    ) -> None:
++        """Buffer del TARGET: fila i <-> token i del lote.
 +
-+        `num_tokens_padded` NO es opcional y es el detalle que costo dos ciclos de
-+        build: el forward corre sobre `batch_desc.num_tokens`, que viene PADEADO
-+        para los grafos CUDA (model_runner.py: is_padding[num_tokens:
-+        num_tokens_after_padding]). Devolver un tensor del tamano real hace que no
-+        cuadre con `y` en el hook, y el hook caia al lambda global en silencio.
-+
-+        Las filas de padding se rellenan con el lambda global: da igual lo que
-+        lleven porque se descartan, pero no pueden quedar sin inicializar.
++        Ya NO hace falta pasar `num_tokens_padded`. Antes era obligatorio porque
++        se devolvia una vista de ese tamano exacto para que cuadrase con `y`; hoy
++        el forward calcula su propia vista sobre este mismo storage, y todo lo que
++        va detras de las filas reales queda al lambda global (`fill` lo rellena).
++        Eso es lo que hace que el arreglo sobreviva al padding de los grafos.
 +        """
-+        lam = self.lambdas[idx_mapping]
-+        lam = np.where(np.isnan(lam), np.float32(global_lambda), lam)
-+        tok = np.repeat(lam, num_scheduled_tokens)
-+        n = int(tok.shape[0])
-+        assert n <= num_tokens_padded, (n, num_tokens_padded)
-+        with torch.inference_mode(False):
-+            self._buf[:n].copy_(torch.from_numpy(tok), non_blocking=True)
-+            if num_tokens_padded > n:
-+                self._buf[n:num_tokens_padded].fill_(float(global_lambda))
-+        return self._buf[:num_tokens_padded]
-diff -uNr src/v1/worker/gpu_input_batch.py src-patched/v1/worker/gpu_input_batch.py
++        tok = np.repeat(self._per_req(idx_mapping, global_lambda), num_scheduled_tokens)
++        refusal_projection.fill(
++            refusal_projection.ROLE_TARGET,
++            torch.from_numpy(np.ascontiguousarray(tok)),
++            global_lambda,
++        )
++
++    def fill_draft(
++        self,
++        idx_mapping: np.ndarray,
++        num_query_per_req: int,
++        global_lambda: float,
++    ) -> None:
++        """Buffer del DRAFTER: fila i <-> (peticion i//q, paso i%q).
++
++        El drafter emite exactamente `num_query_per_req` filas por peticion, en
++        orden (peticion, paso) — ver `DSparkSpeculator._sample_sequential`, que
++        indexa con `_anchor_idx = arange(max_num_reqs) * num_query_per_req`. Por
++        eso el expandido correcto es un repeat CONSTANTE, no `num_scheduled_tokens`
++        del target: los dos conjuntos de filas son disjuntos (multiplos de k
++        frente a multiplos de 1+k) y ahi es donde moria la seleccion por peticion.
++        """
++        lam = self._per_req(idx_mapping, global_lambda)
++        tok = np.repeat(lam, num_query_per_req)
++        refusal_projection.fill(
++            refusal_projection.ROLE_DRAFT,
++            torch.from_numpy(np.ascontiguousarray(tok)),
++            global_lambda,
++        )
++
++    def fill_neutral(self, global_lambda: float) -> None:
++        """Los dos buffers al lambda global. Para dummy/profile runs.
++
++        Sin esto un dummy run consume el contenido RANCIO del ultimo paso real.
++        """
++        refusal_projection.fill_neutral(refusal_projection.ROLE_TARGET, global_lambda)
++        refusal_projection.fill_neutral(refusal_projection.ROLE_DRAFT, global_lambda)
+diff -ruN src/v1/worker/gpu_input_batch.py src-patched/v1/worker/gpu_input_batch.py
 --- src/v1/worker/gpu_input_batch.py	2026-07-15 01:45:53.000000000 +0200
 +++ src-patched/v1/worker/gpu_input_batch.py	2026-08-12 18:22:28.547152593 +0200
 @@ -49,6 +49,9 @@
@@ -744,7 +972,7 @@ diff -uNr src/v1/worker/gpu_input_batch.py src-patched/v1/worker/gpu_input_batch
          self.request_lora_mapping[i1], self.request_lora_mapping[i2] = (
              self.request_lora_mapping[i2],
              self.request_lora_mapping[i1],
-diff -uNr src/v1/worker/gpu_model_runner.py src-patched/v1/worker/gpu_model_runner.py
+diff -ruN src/v1/worker/gpu_model_runner.py src-patched/v1/worker/gpu_model_runner.py
 --- src/v1/worker/gpu_model_runner.py	2026-07-15 01:45:53.000000000 +0200
 +++ src-patched/v1/worker/gpu_model_runner.py	2026-08-12 18:22:28.548152623 +0200
 @@ -49,6 +49,7 @@
@@ -798,7 +1026,7 @@ diff -uNr src/v1/worker/gpu_model_runner.py src-patched/v1/worker/gpu_model_runn
          # cu_num_tokens: [2, 5, 3] -> [2, 7, 10]
          # self.query_pos.np[:10]: [0, 1, 0, 1, 2, 3, 4, 0, 1, 2]
          cu_num_tokens = self._get_cumsum_and_arange(
-diff -uNr src/v1/worker/gpu_worker.py src-patched/v1/worker/gpu_worker.py
+diff -ruN src/v1/worker/gpu_worker.py src-patched/v1/worker/gpu_worker.py
 --- src/v1/worker/gpu_worker.py	2026-07-15 01:45:53.000000000 +0200
 +++ src-patched/v1/worker/gpu_worker.py	2026-08-12 18:22:28.548152623 +0200
 @@ -184,6 +184,32 @@

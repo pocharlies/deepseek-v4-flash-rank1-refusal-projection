@@ -69,8 +69,45 @@ ENV_LAMBDA = "VLLM_REFUSAL_LAMBDA_INIT"
 #                      extra_body: {cache_salt: "refusal:1.0"}}
 SALT_PREFIX = "refusal:"
 
-# Tensor [num_tokens] con el lambda de cada token del lote en curso. Lo rellena
-# el model runner antes del forward; None = usar el escalar global.
+# --- ROLES -------------------------------------------------------------------
+#
+# El mismo modulo de atencion lo instancian DOS productores con layouts de fila
+# DISTINTOS e incompatibles, y ese es el defecto 1 del diagnostico:
+#
+#   target (backbone)  avanza en multiplos de 1+k  -> 6, 12, 18 con max_num_seqs=3
+#   drafter (DSpark)   avanza en multiplos de k    -> 5, 10, 15
+#
+# Son conjuntos DISJUNTOS: un unico vector por token no puede servir a los dos.
+# Cada rol tiene su propio buffer, y el rol se fija en la CONSTRUCCION a partir
+# del prefijo del modulo (lo mismo que ya discrimina `resolve_direction`), no por
+# heuristica en runtime. Asi una fila del drafter no puede leer nunca el lambda
+# de una peticion del target.
+ROLE_TARGET = 0
+ROLE_DRAFT = 1
+ROLE_NAMES = ("target", "draft")
+_N_ROLES = 2
+
+# Buffers PERSISTENTES por rol, [max_num_tokens] cada uno. Se crean UNA vez, en
+# el __init__ del runner -- o sea ANTES de capture_model, y ese orden no es un
+# detalle: es el arreglo del defecto 2.
+#
+# DEFECTO 2 (el que tumbaba el arreglo obvio): `capture_model` no pasa por
+# `execute_model`, asi que en la captura el slot por token estaba en None y la
+# rama que se trazaba DENTRO del grafo era el escalar global. En replay no corre
+# ni una linea de Python, asi que el decode servido por grafo aplicaba el global
+# para siempre, en silencio y sin un solo aviso.
+#
+# Con el buffer ya creado en la captura, lo que se hornea en el grafo es el
+# PUNTERO al buffer (offset 0, invariante para cualquier `buf[:n]`) y el tamano n
+# de ese grafo. En replay el kernel lee esa misma memoria, y el runner ya le ha
+# escrito los valores del paso in-place. Es exactamente el precedente que el
+# propio codigo documenta en dflash/speculator.py: "That buffer's address is what
+# the captured CUDA graph reads from at replay."
+_buf: list[torch.Tensor | None] = [None] * _N_ROLES
+
+# Slot LEGACY del Model Runner V1, que sigue fijando un tensor por paso
+# (gpu_model_runner.py:1958). El V1 no tiene buffers por rol; se conserva para no
+# romperlo. El V2 no lo usa.
 _per_token: torch.Tensor | None = None
 
 
@@ -93,6 +130,86 @@ def set_per_token_lambda(t: torch.Tensor | None) -> None:
 
 def get_per_token_lambda() -> torch.Tensor | None:
     return _per_token
+
+
+# --- API de los buffers por rol ---------------------------------------------
+#
+# La alineacion fila<->peticion es correcta POR CONSTRUCCION en cada rol:
+#   - target: fila i  <-> token i del lote           (repeat por num_scheduled_tokens)
+#   - draft:  fila i  <-> (peticion i//q, paso i%q)  (repeat por num_query_per_req)
+# Las filas de padding llevan el lambda global, asi que cualquier n >= n_real es
+# semanticamente correcta.
+
+
+def ensure_buffers(max_num_tokens: int, device: torch.device) -> None:
+    """Crea los buffers por rol. DEBE llamarse antes de `capture_model`.
+
+    Se inicializan al lambda global vigente: la captura traza el camino por
+    token pero leyendo un buffer NEUTRO, asi que capturar no cambia semantica.
+    `inference_mode(False)` por lo mismo que el tensor de lambda global: un
+    tensor nacido en inference mode no admite mutacion in-place despues.
+    """
+    if not is_enabled():
+        return
+    with _lock:
+        for role in (ROLE_TARGET, ROLE_DRAFT):
+            if _buf[role] is None:
+                with torch.inference_mode(False):
+                    _buf[role] = torch.full(
+                        (max_num_tokens,),
+                        float(_lam_value),
+                        dtype=torch.float32,
+                        device=device,
+                    )
+        logger.info(
+            "refusal projection: buffers por rol listos (%d tokens, %s)",
+            max_num_tokens,
+            device,
+        )
+
+
+def fill(role: int, tok: torch.Tensor, global_lambda: float) -> None:
+    """Escribe `tok` en las filas reales y el lambda global en el resto."""
+    buf = _buf[role]
+    if buf is None:
+        return
+    n = int(tok.shape[0])
+    cap = int(buf.shape[0])
+    if n > cap:
+        # Fail-safe: no recortamos datos reales. Se deja el buffer neutro y el
+        # forward vera el global. Nunca el lambda de otra peticion.
+        _warn_capacity(role, n, cap)
+        fill_neutral(role, global_lambda)
+        return
+    with torch.inference_mode(False):
+        buf[:n].copy_(tok, non_blocking=True)
+        if cap > n:
+            buf[n:].fill_(float(global_lambda))
+
+
+def fill_neutral(role: int, global_lambda: float) -> None:
+    """Todo el buffer al lambda global. Para dummy/profile runs.
+
+    Sin esto un dummy run lee el buffer RANCIO del paso real anterior — que es
+    exactamente el defecto que producia los pares `(16, 8192)` en el log.
+    """
+    buf = _buf[role]
+    if buf is None:
+        return
+    with torch.inference_mode(False):
+        buf.fill_(float(global_lambda))
+
+
+def view_for(role: int, n: int) -> torch.Tensor | None:
+    """Vista [n] del buffer del rol, o None para caer al lambda global."""
+    buf = _buf[role]
+    if buf is None:
+        return None
+    if n > int(buf.shape[0]):
+        _warn_capacity(role, n, int(buf.shape[0]))
+        return None
+    return buf[:n]
+
 
 # lam se cuantiza a entero para la clave de hash de bloque del prefix cache.
 LAMBDA_HASH_SCALE = 1000
@@ -211,22 +328,39 @@ def resolve_direction(prefix: str, num_hidden_layers: int) -> torch.Tensor | Non
     Devolver None deja la capa SIN hook (identidad) y se avisa por log: es preferible
     a adivinar y proyectar con la direccion de otra capa.
     """
+    return resolve(prefix, num_hidden_layers)[0]
+
+
+def resolve(prefix: str, num_hidden_layers: int) -> tuple[torch.Tensor | None, int]:
+    """Como `resolve_direction` pero devuelve tambien el ROL del modulo.
+
+    El rol sale del MISMO criterio que ya decide la clave, asi que no hay
+    heuristica nueva ni ambiguedad: `layers.N` con N < num_hidden_layers es
+    backbone (target); todo lo que cae en `mtp.*` — el drafter DSpark, que se
+    construye con `prefix=layers.{num_hidden_layers+i}`, y la ruta MTP — es
+    draft. Fijar el rol aqui, en la construccion, es lo que impide que un
+    modulo lea el buffer del otro rol en el forward.
+    """
     dirs = get_dirs()
     if dirs is None:
-        return None
+        return None, ROLE_TARGET
 
     parts = prefix.split(".")
     key = None
+    role = ROLE_TARGET
     for i, p in enumerate(parts):
         if p == "layers" and i + 1 < len(parts) and parts[i + 1].isdigit():
             n = int(parts[i + 1])
             if n < num_hidden_layers:
                 key = f"layers.{n}.attn.wo_b"
+                role = ROLE_TARGET
             else:
                 key = f"mtp.{n - num_hidden_layers}.attn.wo_b"
+                role = ROLE_DRAFT
             break
         if p == "mtp" and i + 1 < len(parts) and parts[i + 1].isdigit():
             key = f"mtp.{int(parts[i + 1])}.attn.wo_b"
+            role = ROLE_DRAFT
             break
 
     if key is None or key not in dirs:
@@ -236,11 +370,32 @@ def resolve_direction(prefix: str, num_hidden_layers: int) -> torch.Tensor | Non
             prefix,
             key,
         )
-        return None
-    return dirs[key]
+        return None, ROLE_TARGET
+    return dirs[key], role
 
 
 _warned_shapes: set[tuple[int, int]] = set()
+_warned_capacity: set[tuple[int, int, int]] = set()
+
+
+def _warn_capacity(role: int, want: int, cap: int) -> None:
+    """El unico desajuste que sigue siendo posible con buffers por rol.
+
+    Si esto aparece, el lote pide mas filas de las que el buffer tiene: se cae
+    al lambda GLOBAL (fail-safe, nunca el lambda de otra peticion). Indica que
+    `max_num_tokens` no acota el forward de ese rol, que es un supuesto roto y
+    hay que mirarlo — no un caso normal.
+    """
+    key = (role, want, cap)
+    if key not in _warned_capacity:
+        _warned_capacity.add(key)
+        logger.warning(
+            "refusal projection: rol %s pide %d filas pero el buffer tiene %d; "
+            "se usa el lambda GLOBAL. La seleccion por peticion NO esta actuando.",
+            ROLE_NAMES[role],
+            want,
+            cap,
+        )
 
 
 def _warn_shape_mismatch(got: int, want: int) -> None:
@@ -264,10 +419,12 @@ class RefusalProjection(nn.Module):
     1,66e-3 contra 2,29e-3 haciendolo en bf16 -- mejora un 28%, y es gratis).
     """
 
-    def __init__(self, r_hat: torch.Tensor) -> None:
+    def __init__(self, r_hat: torch.Tensor, role: int = ROLE_TARGET) -> None:
         super().__init__()
         self.register_buffer("r_hat", r_hat.clone(), persistent=False)
         self._lam: torch.Tensor | None = None
+        # Rol FIJO desde la construccion (ver `resolve`). El forward no adivina.
+        self._role = role
 
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         if self._lam is None:
@@ -285,17 +442,25 @@ class RefusalProjection(nn.Module):
         r = self.r_hat
         proj = y.to(torch.float32) @ r                       # [num_tokens]
 
-        # lambda POR TOKEN si el runner lo ha puesto para este lote; si no, el
-        # escalar global. El broadcast funciona igual con [num_tokens] que con
-        # un escalar, asi que el kernel es el mismo en los dos casos.
-        lam = get_per_token_lambda()
-        if lam is not None and lam.shape[0] != proj.shape[0]:
-            # NO silenciar esto. Este fallback existia sin aviso y oculto durante
-            # dos ciclos de build que el tensor por token venia con los tokens
-            # REALES mientras `y` llega PADEADO para los grafos CUDA: la seleccion
-            # por peticion no hacia nada y no habia ni un error que lo delatara.
-            _warn_shape_mismatch(lam.shape[0], proj.shape[0])
-            lam = None
+        # Orden de preferencia del lambda:
+        #   1. buffer PERSISTENTE de mi rol, dimensionado a las filas que veo.
+        #      Es el unico camino que sobrevive al replay de grafo CUDA, porque
+        #      la vista se calcula aqui (en la traza) sobre un storage fijo.
+        #   2. slot `_per_token` legacy, que aun usa el Model Runner V1.
+        #   3. escalar global.
+        # El broadcast funciona igual con [num_tokens] que con un escalar, asi
+        # que el kernel es el mismo en los tres casos.
+        lam = view_for(self._role, proj.shape[0])
+        if lam is None:
+            lam = get_per_token_lambda()
+            if lam is not None and lam.shape[0] != proj.shape[0]:
+                # NO silenciar esto. Este fallback existia sin aviso y oculto
+                # durante dos ciclos de build que el tensor por token venia con
+                # los tokens REALES mientras `y` llega PADEADO para los grafos
+                # CUDA: la seleccion por peticion no hacia nada y no habia ni un
+                # error que lo delatara.
+                _warn_shape_mismatch(lam.shape[0], proj.shape[0])
+                lam = None
         if lam is None:
             lam = self._lam
         return y - (lam * proj).unsqueeze(-1).to(y.dtype) * r.to(y.dtype)
