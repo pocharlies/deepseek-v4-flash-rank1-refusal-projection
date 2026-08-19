@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rank1-negctl-strong
+  namespace: llm
+  labels:
+    rank1.dgx-infra/window: per-request-lambda-20260818
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: rank1-negctl-strong
+        rank1.dgx-infra/window: per-request-lambda-20260818
+    spec:
+      restartPolicy: Never
+      # POR QUE NECESITA GPU: el bloque C de la prueba captura un grafo CUDA y lo
+      # reproduce. Ese es EL camino que estaba muerto en silencio -- en replay no
+      # corre Python, asi que sin GPU la prueba se salta justo lo que hay que
+      # demostrar y pasaria igual arreglada que rota. Sin GPU esto no verifica
+      # el arreglo.
+      #
+      # Va a nvidia-dgx, no a gx10-ec3d: los dos son arm64 y tienen 2 GPUs con
+      # una libre, pero gx10-ec3d es el que sirve el head en produccion.
+      # No usa el checkpoint: las direcciones vienen de /opt/refusal, dentro de
+      # la imagen (757 KB).
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        kubernetes.io/hostname: nvidia-dgx
+      tolerations:
+        - operator: Exists
+      runtimeClassName: nvidia
+      containers:
+        - name: verify
+          # Sustituir por la imagen recien construida con el parche nuevo.
+          image: registry.lan.internal/homelab/dspark-vllm-gx10:0.1.1-rank1g-vision
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "/rank1/negctl_per_request.py"]
+          env:
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: VLLM_REFUSAL_DIRS, value: /opt/refusal/refusal_dirs.safetensors }
+          resources:
+            requests: { cpu: "2", memory: 4Gi }
+            limits: { cpu: "8", memory: 16Gi, nvidia.com/gpu: 1 }
+          volumeMounts:
+            - { name: rank1, mountPath: /rank1 }
+      volumes:
+        - name: rank1
+          configMap: { name: rank1-negctl-strong }

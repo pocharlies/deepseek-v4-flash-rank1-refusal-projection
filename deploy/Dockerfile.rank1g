@@ -1,0 +1,72 @@
+# rank1g: arreglo del lambda POR PETICION, como overlay sobre la imagen viva.
+#
+# POR QUE OVERLAY Y NO REBUILD DESDE LA BASE. La imagen de produccion
+# (0.1.1-rank1f-vision) lleva el plugin de vision de FlyCockpit, cuyo Dockerfile
+# NO esta en git: vive en ~/vision-build de nvidia-dgx. Reconstruir desde
+# ghcr.io/anemll/dspark-vllm-gx10:0.1.1 con el parche completo obligaria a
+# reproducir esa capa a ciegas, y perder vision es una regresion.
+#
+# Que esto sea EXACTO y no un apano esta comprobado, no supuesto: se sacaron los
+# cuatro ficheros del contenedor vivo y se compararon con la copia de trabajo.
+# `refusal_projection.py` del contenedor es byte a byte el baseline de git, y en
+# los otros tres el unico delta es el de este arreglo. O sea: la capa de vision
+# no toca ninguno de los cuatro, y sobrescribirlos no puede pisarla.
+#
+# Los 48 shards del checkpoint no se tocan (vienen del cache HF por hostPath), ni
+# las direcciones, que ya estan en /opt/refusal de la imagen base.
+#
+# EL CONTEXTO ES PLANO: los COPY no llevan ruta, asi que hay que juntar los cinco
+# ficheros en un directorio suelto. Solo dos salen del repo tal cual
+# (vllm/refusal_projection.py y tools/test_refusal_per_request.py); los otros tres
+# son ficheros de vLLM y se reconstruyen sacandolos de la imagen base y aplicando
+# patches/0001-rank1-projection.patch:
+#
+#   mkdir ctx && cd ctx
+#   id=$(docker create $BASE)
+#   S=/usr/local/lib/python3.12/dist-packages/vllm
+#   for f in v1/worker/gpu/refusal_utils.py v1/worker/gpu/model_runner.py \
+#            models/deepseek_v4/attention.py; do
+#     docker cp $id:$S/$f ./$(basename $f); done
+#   docker rm $id
+#   patch -p1 < ../patches/0001-rank1-projection.patch   # solo estos tres
+#   cp ../vllm/refusal_projection.py ../tools/test_refusal_per_request.py \
+#      ../deploy/Dockerfile.rank1g .
+ARG BASE=registry.lan.internal/homelab/dspark-vllm-gx10:0.1.1-rank1f-vision
+FROM ${BASE}
+
+ARG VLLM_DIR=/usr/local/lib/python3.12/dist-packages/vllm
+
+COPY refusal_projection.py            ${VLLM_DIR}/refusal_projection.py
+COPY refusal_utils.py                 ${VLLM_DIR}/v1/worker/gpu/refusal_utils.py
+COPY model_runner.py                  ${VLLM_DIR}/v1/worker/gpu/model_runner.py
+COPY attention.py                     ${VLLM_DIR}/models/deepseek_v4/attention.py
+COPY test_refusal_per_request.py      /opt/refusal/test_refusal_per_request.py
+
+RUN cd ${VLLM_DIR} \
+ && python3 -m py_compile \
+      refusal_projection.py \
+      v1/worker/gpu/refusal_utils.py \
+      v1/worker/gpu/model_runner.py \
+      models/deepseek_v4/attention.py \
+ && echo "rank1g: ficheros compilados"
+
+# La cadena de imports tiene que levantar y el hook seguir INERTE por defecto.
+RUN cd /tmp && python3 -c "\
+import vllm; \
+from vllm.models.deepseek_v4 import attention; \
+from vllm.v1.worker.gpu.refusal_utils import RefusalState; \
+import vllm.refusal_projection as rp; \
+assert not rp.is_enabled(), 'el hook no debe estar activo por defecto'; \
+assert hasattr(rp, 'ensure_buffers') and hasattr(rp, 'view_for'); \
+assert rp.ROLE_TARGET != rp.ROLE_DRAFT; \
+print('rank1g build-check OK', vllm.__version__)"
+
+# Layout de filas por rol, semantica del buffer y aislamiento target/draft.
+# Sin GPU el bloque del replay de grafo CUDA se salta solo: esto NO acredita el
+# arreglo entero, solo que no esta roto de base. El replay se cobra aparte, en
+# job-verify-per-request.yaml, que si pide GPU.
+RUN cd /tmp && VLLM_REFUSAL_DIRS=/opt/refusal/refusal_dirs.safetensors \
+    python3 /opt/refusal/test_refusal_per_request.py
+
+LABEL dgx-infra.rank1.fix="per-request-lambda: buffers por rol vivos bajo replay de grafo CUDA"
+LABEL dgx-infra.rank1.base="0.1.1-rank1f-vision"

@@ -1,0 +1,64 @@
+# Build de rank1g: arreglo del lambda POR PETICION.
+#
+# Overlay sobre 0.1.1-rank1f-vision (ver Dockerfile.rank1g): sobrescribe cuatro
+# ficheros de vLLM y nada mas, asi que el plugin de vision se conserva sin tener
+# que reconstruir su capa, cuyo Dockerfile no esta en git.
+#
+# Mismo patron que vision/job-build-vision.yaml: el CONTEXTO vive en nvidia-dgx
+# (~/rank1g-build), asi que el cliente buildctl corre ahi; el DAEMON esta en
+# gx10-ec3d y recibe el contexto por la red.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rank1g-image-build
+  namespace: buildkit
+  labels:
+    rank1.dgx-infra/window: per-request-lambda-20260818
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: rank1g-image-build
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: nvidia-dgx
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: buildctl
+          image: docker.io/moby/buildkit:v0.31.0-rootless
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              echo "contexto:"; ls -la /ctx
+              buildctl --addr tcp://buildkitd-arm64.buildkit.svc.cluster.local:1234 \
+                build \
+                --frontend dockerfile.v0 \
+                --local context=/ctx \
+                --local dockerfile=/ctx \
+                --output type=image,name=registry.lan.internal/homelab/dspark-vllm-gx10:0.1.1-rank1g-vision,push=true \
+                --progress plain
+              echo "RANK1G-BUILD-DONE"
+          env:
+            - { name: BUILDKIT_HOST, value: "tcp://buildkitd-arm64.buildkit.svc.cluster.local:1234" }
+            - { name: DOCKER_CONFIG, value: "/dockercfg" }
+          resources:
+            requests: { cpu: "500m", memory: 512Mi }
+            limits: { cpu: "2", memory: 2Gi }
+          volumeMounts:
+            - { name: ctx, mountPath: /ctx, readOnly: true }
+            - { name: dockercfg, mountPath: /dockercfg, readOnly: true }
+      volumes:
+        - name: ctx
+          hostPath: { path: /home/<user>/rank1g-build, type: Directory }
+        - name: dockercfg
+          secret:
+            secretName: registry-push-lan
+            items:
+              - key: .dockerconfigjson
+                path: config.json
