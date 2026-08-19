@@ -320,7 +320,7 @@ breaks.** Two caveats that keep this from being a licence to raise it:
   acceptance are different axes; nothing above speaks to the second.
 
 Full report, raw JSON, and the *confounded* first version of the quality sweep (kept
-deliberately as a worked example): `hf/benchmarks/2026-08-19/`.
+deliberately as a worked example): [`benchmarks/2026-08-19/`](benchmarks/2026-08-19/README.md).
 
 ---
 
