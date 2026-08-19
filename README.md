@@ -310,6 +310,37 @@ deliberately allowed, since it is the only way to ask for a *more* reticent mode
 vLLM cannot guarantee this route stays off the internet. It is an ordinary HTTP route —
 the ingress decides. `/admin/*` should not leave the cluster network.
 
+#### Per-request λ — withdrawn in August, restored 2026-08-19 with a test that can fail
+
+λ also travels **per request** in `cache_salt: "refusal:<x>"`, so one pod can serve a normal
+alias and an ablated one from the same weights, in the same batch. This claim was removed
+from this README in August because the mechanism silently did not work. It now does, and the
+evidence is published rather than asserted.
+
+Three defects, and fixing only the loud one would have changed nothing:
+
+1. **Target and drafter share the attention module** but advance in disjoint multiples
+   (`1+k` vs `k`); one per-token vector cannot serve both. This one warned — ~25
+   shape-mismatch lines per boot.
+2. **`capture_model` never goes through `execute_model`**, so at capture time the per-token
+   slot is `None` and the branch traced *into the graph* is the global scalar. Replay runs no
+   Python, so every graph-served decode used the global λ forever — **with no warning at
+   all.** This was the one that mattered.
+3. **The slot was never cleared**, so dummy runs read the previous step's stale tensor.
+
+The fix is a persistent **buffer per role**, allocated in the runner's `__init__` (before
+`capture_model`) and always mutated in place; the forward takes `buf[:n]`, so capture bakes
+the pointer and size while each step rewrites the contents. Same pattern LoRA and DFlash
+already use in that file. The role is fixed at module construction from the prefix, using the
+same criterion that selects the direction, so a drafter row cannot read a target request's λ.
+Unexpected layout falls back to the **global** λ, never to another request's.
+
+The GPU test captures a graph, mutates the buffer, calls `replay()` and requires the output to
+change (`err_max=1.6e-03`); the negative control rebuilds the old behaviour and reports
+`replay reflects the per-request lambda: False`. On the live pod, boot-time shape-mismatch
+warnings went from ~25 to **0**. End-to-end through the router, two requests **in the same
+batch**: 4/4 sealed triggers answered while the unsealed one still refused.
+
 ### Tests — 22/22 + 15/15, inside the image
 
 Direction loading (46 × `[4096]` f32, unit norm) · prefix resolution for backbone, DSpark
@@ -409,7 +440,7 @@ when that is a real tool limit** — it removes the policy refusal, not the grou
 
 ---
 
-## 8. Three ways these benchmarks lied before they were fixed
+## 8. Four ways these benchmarks lied before they were fixed
 
 Documented because each one nearly shipped as a finding.
 
@@ -434,13 +465,51 @@ that control, two wording differences between base and λ=0 would have been repo
 **3 · n=1 decides nothing on this bench.** The first two λ=1 measurements gave 0.5383 and
 0.5944 — one below the floor, one well above, same λ. Any verdict at n=1 here is noise.
 
+**4 · The same trap as #1, walked into again — with a whole quality sweep on top.**
+2026-08-19. The λ sweep over MMLU-Pro and GSM8K ran at `max_gen_toks=2048`, inherited from
+an older runner. It produced a clean descending curve and two significant results
+(`0→2.0 p=0.0010`, `0→2.5 p=0.0034`) that read as *λ degrades the model*. It was
+truncation. Empty answers rose monotonically with λ (18 → 23 → 25 → 31 → 31) and empties
+score as wrong. Reproducing one empty item against the head:
+
+```
+finish_reason=length   content=0 chars   reasoning=10050 chars   completion_tokens=2048
+```
+
+The budget is consumed by reasoning and no answer is emitted — **at λ=0 exactly as at
+λ=2.5**. Conditioned on non-empty answers, accuracy is flat across every λ
+(93.6 → 93.3 → 93.1 → 95.1 → 95.1). Re-run at 4000 tokens, the 0→1.0 delta collapsed from
+−4.5 points to −0.9 and *nothing* came out significant.
+
+The generalisation, and the reason this is its own entry rather than a footnote to #1:
+**on a reasoning model, a short generation budget confounds λ with verbosity.** Any arm
+that makes the model think longer will look less capable. Failure #1 was known, written
+down in this very section, and it happened again anyway — in a different suite, wearing a
+p-value. Both sweeps are published, the confounded one included, in
+[`hf/benchmarks/2026-08-19/`](hf/benchmarks/2026-08-19/README.md).
+
 ---
 
 ## 9. What this does **not** establish
 
-- **General capability is unmeasured.** MMLU-Pro, GSM8K, HumanEval were not run — the same
-  gap the reference model card left open. Tool-calling, retrieval and acceptance are covered;
-  general reasoning is not.
+- ~~**General capability is unmeasured.**~~ **Closed 2026-08-19.** MMLU-Pro (112, balanced)
+  and GSM8K (100) were run paired across λ ∈ {0, 1, 1.5, 2, 2.5} at a 4000-token budget:
+  no comparison significant, every McNemar p ≥ 0.09, and the curve is not monotonic.
+  HumanEval is still not run. See
+  [`hf/benchmarks/2026-08-19/`](hf/benchmarks/2026-08-19/README.md) — and read §8.4 first,
+  because the *first* version of that sweep was confounded by truncation and looked
+  convincing.
+- **The truthfulness suites hit a ceiling, so they do not discriminate.** False premises,
+  sycophancy under pressure and NIAH retrieval all return 100 % at *every* λ up to 2.5
+  (0 yields in 113 opportunities; 90/90 needles). That refutes the hypothesis that ablating
+  the refusal direction also ablates "no, that is false" — but a suite that saturates cannot
+  rank the arms. With 0 events in ~22 items per arm the rule of three only rules out
+  sycophancy above **~13.6 %**; the myths used are easy; pressure is a single turn.
+- **Nothing here validates an answer that only a high λ produces.** That content is, by
+  construction, what the model represented least well, and it is exactly the domain where no
+  ground truth exists to check it against. A model can correct textbook myths and retrieve
+  needles at 128k and still confabulate a fluent, confident, structurally plausible
+  procedure. Fluency is not a correctness signal.
 - **256k is unmeasured**, deliberately. Fifteen prefills at that length against a model
   serving live traffic is a load to schedule, not to sneak in.
 - **Variance rises with λ, even where the mean passes.** 1 of 6 runs at λ=1.5 and 2 of 6 at

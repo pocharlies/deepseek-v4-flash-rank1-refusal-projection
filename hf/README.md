@@ -288,15 +288,52 @@ n=6 alternated run above. Treat the λ=1 and baked numbers as indicative, not as
 the same weight as the rest of this table. The λ=1 **refusal rate** is separately backed by
 `refusal_rate.json` and `refusal_sweep.json`.
 
-**It saturates at 1.5.** λ=2 adds nothing over 1.5 and only moves toward the baked regime,
-which does degrade. If you raise it, 1.5 is the point — never 2.
+**It saturates at 1.5.** λ=2 adds nothing over 1.5: refusal is already 0 % there. 1.5 is the
+operating point.
+
+### 2026-08-19 — λ up to 2.5, measured on capability and on truthfulness
+
+Recommending 1.5 used to rest partly on the assumption that higher λ degrades. That
+assumption was tested and **it does not hold on this checkpoint**:
+
+| λ | MMLU-Pro (112) | GSM8K (100) | corrects a false premise | yields under pressure | NIAH |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 80.4 % | 71 % | 100 % | 0 % | 18/18 |
+| 1.0 | 79.5 % | 77 % | 100 % | 0 % | 18/18 |
+| 1.5 | 76.8 % | 74 % | 100 % | 0 % | 18/18 |
+| 2.0 | 77.7 % | 69 % | 100 % | 0 % | 18/18 |
+| 2.5 | 78.6 % | 68 % | 100 % | 0 % | 18/18 |
+
+Paired, temperature 0, 4000-token budget, per-request λ (the global dial stayed at 0 and was
+re-checked between arms). **No comparison is significant** — every McNemar p ≥ 0.09, and the
+curve is not monotonic. **0 yields out of 113** sycophancy opportunities; 90/90 needles.
+
+So the honest statement is: **stay at 1.5 because above it you gain nothing, not because it
+breaks.** Two caveats that keep this from being a licence to raise it:
+
+- The truthfulness suites return 100 % in *every* arm — a ceiling effect. They refute the
+  hypothesis that ablation also removes "no, that is false", but a saturated suite cannot
+  rank arms. With 0 events in ~22 items per arm, the rule of three only rules out sycophancy
+  above ~13.6 %.
+- **Acceptance at λ≥2 is still not measured.** The baked-checkpoint figure at λ_eff ≈ 2.43
+  (0.5128) remains the only signal there and it is below the floor. Capability and speculative
+  acceptance are different axes; nothing above speaks to the second.
+
+Full report, raw JSON, and the *confounded* first version of the quality sweep (kept
+deliberately as a worked example): `hf/benchmarks/2026-08-19/`.
 
 ---
 
 ## What this does not establish
 
-- **General capability is unmeasured.** MMLU-Pro, GSM8K, HumanEval were not run — the same
-  gap the reference model card left open.
+- ~~**General capability is unmeasured.**~~ **Closed 2026-08-19** for MMLU-Pro and GSM8K
+  across λ ∈ {0, 1, 1.5, 2, 2.5} — see Calibration. HumanEval is still not run.
+- **Nothing here validates an answer that only a high λ produces.** That content is, by
+  construction, what the model represented least well, and it is the one domain where no
+  ground truth exists to check it against. This model can correct textbook myths and retrieve
+  needles at 128k and still confabulate a fluent, confident, structurally plausible
+  procedure. Fluency is not a correctness signal — do not read the tables above as a warrant
+  for trusting output that only appears once λ is raised.
 - **256k is unmeasured**, deliberately. Retrieval is validated to 126,940 real tokens.
 - **Variance rises with λ even where the mean passes.** 1 of 6 runs at λ=1.5 and 2 of 6 at
   λ=1 dipped below the 0.55 acceptance floor. Means are indistinguishable; individual runs
@@ -309,6 +346,13 @@ Benchmarks that lied before being fixed, documented in full in the repo: the mod
 content and reads as a spectacular refusal-removal result — it isn't. And exact string match
 is not a valid gate: vLLM is not deterministic run-to-run at temperature 0, with measured
 noise of ±1 cell in 30.
+
+That first failure recurred on 2026-08-19, in a different suite and wearing a p-value: the
+quality sweep at `max_gen_toks=2048` produced a tidy descending curve and two "significant"
+results, and all of it was truncation — empty answers rise with λ (18→31) because the model
+reasons longer, and empties score as wrong. Conditioned on non-empty answers the accuracy is
+flat at every λ. **On a reasoning model, a short generation budget confounds λ with
+verbosity.** The confounded run is published next to the corrected one.
 
 ---
 

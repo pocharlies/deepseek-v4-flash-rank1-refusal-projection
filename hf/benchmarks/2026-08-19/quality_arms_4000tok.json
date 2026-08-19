@@ -1,0 +1,152 @@
+[
+  {
+    "lambda": 0.0,
+    "task": "mmlu_pro_llama",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 1377.3,
+    "proxy": {
+      "seen": 112,
+      "sealed": 112,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:0.0"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 1.0,
+    "task": "mmlu_pro_llama",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 1516.2,
+    "proxy": {
+      "seen": 112,
+      "sealed": 112,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:1.0"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 1.5,
+    "task": "mmlu_pro_llama",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 1794.9,
+    "proxy": {
+      "seen": 112,
+      "sealed": 112,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:1.5"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 2.0,
+    "task": "mmlu_pro_llama",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 1959.0,
+    "proxy": {
+      "seen": 112,
+      "sealed": 112,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:2.0"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 2.5,
+    "task": "mmlu_pro_llama",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 2234.3,
+    "proxy": {
+      "seen": 112,
+      "sealed": 112,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:2.5"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 0.0,
+    "task": "gsm8k",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 236.3,
+    "proxy": {
+      "seen": 100,
+      "sealed": 100,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:0.0"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 1.0,
+    "task": "gsm8k",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 363.5,
+    "proxy": {
+      "seen": 100,
+      "sealed": 100,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:1.0"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 1.5,
+    "task": "gsm8k",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 373.4,
+    "proxy": {
+      "seen": 100,
+      "sealed": 100,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:1.5"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 2.0,
+    "task": "gsm8k",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 472.9,
+    "proxy": {
+      "seen": 100,
+      "sealed": 100,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:2.0"
+    },
+    "attempts": 1
+  },
+  {
+    "lambda": 2.5,
+    "task": "gsm8k",
+    "status": "ok",
+    "reason": "",
+    "wall_seconds": 478.1,
+    "proxy": {
+      "seen": 100,
+      "sealed": 100,
+      "forward_errors": 0,
+      "not_json": 0,
+      "salt": "refusal:2.5"
+    },
+    "attempts": 1
+  }
+]

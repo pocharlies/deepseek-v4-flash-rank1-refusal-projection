@@ -1,0 +1,360 @@
+{
+  "note": "bench_niah ran with --no-lambda-control: it never touched the global dial. Each arm's lambda came from the per-request seal (cache_salt) and is the `lambda` field here. The `lambda: 0.0` inside each raw JSON is the dial, not the arm.",
+  "lengths": [
+    32000,
+    128000
+  ],
+  "depths": [
+    0,
+    50,
+    100
+  ],
+  "reps_per_cell": 3,
+  "arms": [
+    {
+      "lambda": 0.0,
+      "hits": 18,
+      "n": 18,
+      "errors": 0,
+      "empty": 0,
+      "cells": [
+        {
+          "target_tokens": 32000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 73.2
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 36.1
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 5.4
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 99.8
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 67.1
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 92.3
+        }
+      ]
+    },
+    {
+      "lambda": 1.0,
+      "hits": 18,
+      "n": 18,
+      "errors": 0,
+      "empty": 0,
+      "cells": [
+        {
+          "target_tokens": 32000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 83.8
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 60.9
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 5.9
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 102.0
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 68.5
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 83.9
+        }
+      ]
+    },
+    {
+      "lambda": 1.5,
+      "hits": 18,
+      "n": 18,
+      "errors": 0,
+      "empty": 0,
+      "cells": [
+        {
+          "target_tokens": 32000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 88.0
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 47.1
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 12.0
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 97.3
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 68.9
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 41.7
+        }
+      ]
+    },
+    {
+      "lambda": 2.0,
+      "hits": 18,
+      "n": 18,
+      "errors": 0,
+      "empty": 0,
+      "cells": [
+        {
+          "target_tokens": 32000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 101.2
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 50.8
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 20.6
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 95.7
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 63.5
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 93.0
+        }
+      ]
+    },
+    {
+      "lambda": 2.5,
+      "hits": 18,
+      "n": 18,
+      "errors": 0,
+      "empty": 0,
+      "cells": [
+        {
+          "target_tokens": 32000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 94.4
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 40.0
+        },
+        {
+          "target_tokens": 32000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 6.7
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 0,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 77.8
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 50,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 55.3
+        },
+        {
+          "target_tokens": 128000,
+          "depth_pct": 100,
+          "hits": 3,
+          "n": 3,
+          "errors": 0,
+          "empty": 0,
+          "truncated": 0,
+          "avg_latency_s": 17.3
+        }
+      ]
+    }
+  ]
+}
