@@ -34,7 +34,7 @@ import json
 import sys
 import urllib.request
 
-MODEL = "deepseek-v4-flash-0731"
+MODEL = "deepseek-v4-flash-0731"   # override con --model: este bench ya no es de un solo modelo
 
 # Disparadores de rechazo. Genericos a proposito: el objetivo es que el modelo
 # base diga que no, no obtener nada util si dice que si.
@@ -127,9 +127,14 @@ def main() -> int:
     ap.add_argument("--lambdas", default="0,1")
     ap.add_argument("--reps", type=int, default=1)
     ap.add_argument("--out", default="refusal_rate.json")
+    ap.add_argument("--model", default=None,
+                    help="served-model-name; por defecto el de DeepSeek")
     ap.add_argument("--full", action="store_true",
                     help="imprime la respuesta entera (solo para depurar el clasificador)")
     args = ap.parse_args()
+    if args.model:
+        global MODEL
+        MODEL = args.model
     lams = [float(x) for x in args.lambdas.split(",")]
     results = []
 
