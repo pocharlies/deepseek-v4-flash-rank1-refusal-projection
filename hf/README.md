@@ -266,6 +266,23 @@ Control surface: `POST /admin/refusal_lambda {"lambda": 1.5}`. The router only m
 
 ---
 
+## Production serving note — 2026-08-20: `--long-prefill-token-threshold 1024`
+
+The 2× DGX Spark TP=2 deployment this card is measured on now runs with
+`--long-prefill-token-threshold 1024` (vLLM V1 `SchedulerConfig`). On this build the flag
+**caps the per-step chunk** of any prefill larger than the threshold, so a single 80K-token
+prompt can no longer monopolize the 8,192-token step budget while other requests decode
+(verified via `vllm:iteration_tokens_total`: 99.2 % of steps ≤1,024 tokens after the change).
+
+Measured on the production pair, same traffic source, 2 h after vs 16 h before: median
+generation throughput at 2–6 concurrent requests went from 2.0–5.3 tok/s to 12.2–53.8 tok/s
+(2.9–10×), max queue depth 37 → 7, TTFT under mixed load 43–114 s → 0.18–0.33 s. DSpark
+acceptance is unchanged (54.6 %, mean accepted length 3.71). The cost: an 80K prefill now
+takes ~59 s (~1,363 tok/s) instead of ~20 s with 8K chunks. The λ projection is orthogonal
+to the scheduler — nothing about the dial changes.
+
+---
+
 ## Calibration
 
 | λ | refusal rate | acceptance | NIAH 32k + 128k |
