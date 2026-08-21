@@ -75,8 +75,9 @@ Así que "el resto del routing sigue sin interrupción" **no se puede cumplir**.
 
 Alias de LiteLLM que se caen: `dense`, `dense-reasoning`, `dense-uncensored`,
 `taxonomy`, `bge-m3`, `bge-m3-embedding`, `bge-reranker`, `bge-reranker-v2-m3`,
-`stt-turbo`, `whisper-1`, `omnivoice-tts`, `tts-1`. Sobreviven solo
-`gpt-5.6-sol/terra/luna` (codex-bridge → chatgpt.com, no corre en el DGX).
+`stt-turbo`, `whisper-1`, `omnivoice-tts`, `tts-1`. En aquella medicion solo
+sobrevivian rutas externas que ya han sido retiradas; hoy no cuentan como
+capacidad ni como continuidad del DGX.
 
 Confirmaste "evictar todo". Queda registrado aquí.
 
