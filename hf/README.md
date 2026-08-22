@@ -44,6 +44,20 @@ The clean range in between only exists at runtime.
 Code, patches, benchmark harnesses and every raw result:
 **https://github.com/pocharlies/deepseek-v4-flash-rank1-refusal-projection**
 
+### vLLM 0.27.1 DSpark runtime — 2026-08-22
+
+The exact GB10 compatibility sources are published in GitHub under
+[`runtime/vllm-0.27.1/`](https://github.com/pocharlies/deepseek-v4-flash-rank1-refusal-projection/tree/main/runtime/vllm-0.27.1).
+The serving configuration was not retuned: DSpark probabilistic `k=5`, TP=2, B12X,
+`nvfp4_ds_mla`, 393216 context, 4 sequences and 8192 batched tokens. The port recompiles
+the known-good DeepGEMM sm_121 source against vLLM 0.27.1's PyTorch ABI and carries the
+multimodal prompt-update compatibility override.
+
+The measured code workload reached **67.41 tok/s median**, 0.35 s TTFT and 67.39% DSpark
+acceptance. Health, `min_p`, tool calling and image input passed with zero restarts.
+Machine-readable evidence is in
+[`benchmarks/2026-08-22/vllm-0.27.1-dspark.json`](benchmarks/2026-08-22/vllm-0.27.1-dspark.json).
+
 Measured on 2× DGX Spark GB10 (sm_121), vLLM 0.25.2, TP=2, DSpark speculative decoding k=5,
 `--max-model-len 262144`, `--enable-prefix-caching`.
 

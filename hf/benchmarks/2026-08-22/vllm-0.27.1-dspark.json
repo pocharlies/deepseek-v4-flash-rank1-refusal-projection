@@ -1,0 +1,63 @@
+{
+  "schema_version": "runtime-benchmark.v1",
+  "measured_at": "2026-08-22",
+  "hardware": "2x NVIDIA DGX Spark GB10 / sm_121 / TP=2 over RoCE",
+  "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+  "model_revision": "9e165c30",
+  "runtime": {
+    "vllm": "0.27.1",
+    "deepgemm": "2.5.0-sm121-relinked-torch2.13",
+    "b12x": "0.15.3",
+    "image_digest": "sha256:566a7332acf6d0b01d445c4a55bb29021ea70fa9f1fde9f4f77176a846906262"
+  },
+  "configuration_unchanged": {
+    "tensor_parallel_size": 2,
+    "distributed_executor_backend": "mp",
+    "speculative_method": "dspark",
+    "num_speculative_tokens": 5,
+    "draft_sample_method": "probabilistic",
+    "kv_cache_dtype": "nvfp4_ds_mla",
+    "moe_backend": "flashinfer_b12x",
+    "max_model_len": 393216,
+    "max_num_seqs": 4,
+    "max_num_batched_tokens": 8192,
+    "max_cudagraph_capture_size": 24,
+    "gpu_memory_utilization": 0.85,
+    "default_min_p": 0.01
+  },
+  "benchmarks": {
+    "code": {
+      "samples": 3,
+      "completion_tokens_per_sample": 256,
+      "decode_tok_s": [65.39515520521641, 69.61678063293178, 67.41458032317146],
+      "median_decode_tok_s": 67.41458032317146,
+      "median_ttft_s": 0.3491352630080655,
+      "draft_tokens": 880,
+      "accepted_tokens": 593,
+      "acceptance_rate": 0.6738636363636363
+    },
+    "technical_prose": {
+      "samples": 3,
+      "completion_tokens_per_sample": 256,
+      "decode_tok_s": [40.7973939342003, 40.92239968960633, 39.05494169596872],
+      "median_decode_tok_s": 40.7973939342003,
+      "median_ttft_s": 0.35912799602374434,
+      "draft_tokens_including_warmup": 1940,
+      "accepted_tokens_including_warmup": 638,
+      "acceptance_rate_including_warmup": 0.3288659793814433
+    }
+  },
+  "functional_checks": {
+    "health": "pass",
+    "min_p_spec_decode_tests": "3/3 pass",
+    "tool_call": "pass",
+    "multimodal_image": "pass",
+    "head_restarts": 0,
+    "worker_restarts": 0
+  },
+  "historical_code_reference": {
+    "decode_tok_s_range": [58, 66],
+    "acceptance_percent": 60.5,
+    "caveat": "same hardware and code-heavy class, not the exact same prompt"
+  }
+}

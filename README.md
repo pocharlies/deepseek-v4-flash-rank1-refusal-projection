@@ -10,6 +10,19 @@ speculative decoding k=5, `--max-model-len 262144`.
 The direction vectors and model card are published to the Hugging Face Hub from
 [`hf/`](hf/). Published at [`pocharlies/deepseek-v4-flash-0731-uncensored-abliterated-refusal-directions`](https://huggingface.co/pocharlies/deepseek-v4-flash-0731-uncensored-abliterated-refusal-directions).
 
+### vLLM 0.27.1 + unchanged DSpark configuration — 2026-08-22
+
+The tested GB10 compatibility bundle is now published under
+[`runtime/vllm-0.27.1/`](runtime/vllm-0.27.1/). The serving parameters remain DSpark
+probabilistic `k=5`, TP=2, B12X, `nvfp4_ds_mla`, 393216 context, 4 sequences and 8192
+batched tokens. The port relinks the known-good DeepGEMM sm_121 source against PyTorch 2.13
+and adds the vLLM 0.27.1 multimodal prompt-update override.
+
+Measured code decode was **67.41 tok/s median** with 67.39% DSpark acceptance; the prior
+clean code-heavy reference was 58–66 tok/s (same hardware, not the exact same prompt).
+Health, `min_p`, tools and image input passed with zero pod restarts. Full source and
+machine-readable evidence are linked from the runtime directory.
+
 **Headline result — λ=1.5 removes refusal completely at no measurable cost:**
 
 | metric | λ=0 | λ=1.5 | verdict |

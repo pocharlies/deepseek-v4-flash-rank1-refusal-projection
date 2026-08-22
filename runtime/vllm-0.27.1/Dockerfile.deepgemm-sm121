@@ -1,0 +1,33 @@
+# syntax=docker/dockerfile:1.7
+ARG BASE
+FROM nvidia/cuda:13.0.2-devel-ubuntu24.04@sha256:450d11555d20ac8ebbbc13ebf17589c2bd42869171a90179ce7098b4a5e64c6a AS cuda-devel
+FROM ${BASE}
+
+ARG SITE=/usr/local/lib/python3.12/dist-packages
+ARG DEEPGEMM_COMMIT=a6b593d2826719dcf4892609af7b84ee23aaf32a
+
+# `deepgemm-src` is a digest-pinned BuildKit Git context supplied by the build
+# command.  This revision is the SM120/121 fork used by the stable DSpark image.
+COPY --from=deepgemm-src / /tmp/deepgemm-src
+COPY runtime/vllm-0.27.1/build_deepgemm_extension.py /tmp/build_deepgemm_extension.py
+COPY --from=cuda-devel /usr/local/cuda-13.0/targets/sbsa-linux/include/ \
+     /usr/local/cuda-13.0/targets/sbsa-linux/include/
+
+RUN grep -q 'arch_major == 10 or arch_major == 12' \
+       /tmp/deepgemm-src/csrc/apis/layout.hpp \
+    && python3 /tmp/build_deepgemm_extension.py \
+       /tmp/deepgemm-src /tmp/deepgemm-build python3 \
+    && rm -rf ${SITE}/vllm/third_party/deep_gemm \
+    && mkdir -p ${SITE}/vllm/third_party/deep_gemm/include \
+    && cp -a /tmp/deepgemm-src/deep_gemm/. \
+       ${SITE}/vllm/third_party/deep_gemm/ \
+    && cp -a /tmp/deepgemm-src/third-party/cutlass/include/. \
+       ${SITE}/vllm/third_party/deep_gemm/include/ \
+    && cp /tmp/deepgemm-build/_C*.so \
+       ${SITE}/vllm/third_party/deep_gemm/ \
+    && python3 -c 'import vllm; from vllm.third_party import deep_gemm as dg; assert vllm.__version__ == "0.27.1"; assert dg.__version__ == "2.5.0"; assert callable(dg.transform_sf_into_required_layout)' \
+    && rm -rf /tmp/deepgemm-src /tmp/deepgemm-build \
+       /tmp/build_deepgemm_extension.py
+
+LABEL ai.e-dani.deepgemm.commit="a6b593d2826719dcf4892609af7b84ee23aaf32a" \
+      ai.e-dani.deepgemm.version="2.5.0-sm121-relinked-torch2.13"

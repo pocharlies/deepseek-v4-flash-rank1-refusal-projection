@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1.7
+ARG BASE
+FROM ${BASE}
+
+ARG SITE=/usr/local/lib/python3.12/dist-packages
+COPY runtime/vllm-0.27.1/patch_dsv4_vision_0271.py /opt/deepseek-v4/patch_dsv4_vision_0271.py
+
+RUN python3 /opt/deepseek-v4/patch_dsv4_vision_0271.py \
+       ${SITE}/dsv4_vision_vllm/model.py \
+    && python3 -m py_compile ${SITE}/dsv4_vision_vllm/model.py \
+    && python3 -c 'from dsv4_vision_vllm.model import DSV4VisionMultiModalProcessor as P; assert P._hf_processor_applies_updates(None, "", None, {}, {}) is False' \
+    && rm /opt/deepseek-v4/patch_dsv4_vision_0271.py
+
+LABEL ai.e-dani.dsv4-vision.vllm-compat="0.27.1-hf-prompt-updates-v1"
