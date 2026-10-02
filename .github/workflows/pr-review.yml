@@ -1,0 +1,40 @@
+# Review automatica de pull requests con DeepSeek, servido por LiteLLM.
+#
+# Copia este fichero tal cual a `.github/workflows/pr-review.yml` de tu repo.
+# Los secretos (LITELLM_CI_KEY, TELEGRAM_CI_BOT_TOKEN, TELEGRAM_CI_CHAT_ID)
+# son de ORGANIZACION y entran solos con `secrets: inherit`.
+#
+# La implementacion vive en el repo del framework, no aqui:
+#   pocharlies-org/k8s-gitops-pocharlies
+#     .github/workflows/reusable-pr-review.yml   <- orquestacion
+#     .github/actions/llm-review/                <- accion + review.py
+#
+# El check NO bloquea: si el modelo no esta disponible (los Sparks conmutan de
+# perfil de computo) la review se omite y el check queda en verde.
+#
+# `workflow_dispatch` revisa el ultimo commit del tronco y lo comenta ahi: es
+# el modo con el que se valida el repo sin abrir un PR de prueba.
+#
+# `pull_request` a proposito, NUNCA `pull_request_target`: el segundo ejecuta
+# con los secretos del repo base sobre codigo de un fork.
+name: PR review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  review:
+    # El bloque va AQUI y no solo en el workflow reutilizable: la organizacion
+    # tiene `default_workflow_permissions: read` y un workflow llamado solo
+    # puede REBAJAR los permisos de quien lo llama, nunca ampliarlos. Sin esto
+    # el comentario se va en 403 y parece que el bot no encontro nada.
+    permissions:
+      contents: read
+      pull-requests: write
+      # Para que el modo `workflow_dispatch` publique el comentario de COMMIT
+      # hace falta `contents: write`. No viene puesto a proposito: sin el, ese
+      # modo sigue en verde y deja el review en el resumen del job.
+    uses: pocharlies-org/k8s-gitops-pocharlies/.github/workflows/reusable-pr-review.yml@main
+    secrets: inherit
